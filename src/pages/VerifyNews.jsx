@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
-  Search, Bell, Plus, Send, Image, Clapperboard, Network, Keyboard, X,
-  LayoutGrid, List, Link2, Share2, AlertTriangle, Users,
-  CheckCircle2, ShieldAlert, HelpCircle, Camera, FileVideo2, GitBranch,
+  Search, Bell, Plus, Send, Image, Clapperboard, Keyboard, X,
+  LayoutGrid, List, Link2, Share2, Download, RefreshCw,
+  Activity, BarChart2, Clock, PlusCircle, ZoomIn, Maximize2,
 } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
 
@@ -10,87 +10,187 @@ function VerifyNews() {
   const [query, setQuery] = useState('')
   const [files, setFiles] = useState([])
   const [activeTool, setActiveTool] = useState(null)
-  const [verdict, setVerdict] = useState(null)
   const [results, setResults] = useState(null)
-  const [resultMode, setResultMode] = useState('multi') // 'single' أو 'multi'
+  const [mediaResult, setMediaResult] = useState(null)
+  const [heatmap, setHeatmap] = useState(false)
+  const [zoom, setZoom] = useState(1)
+  const [page, setPage] = useState(1)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [viewMode, setViewMode] = useState('list') // 'list' or 'grid'
+  const [selectedArticle, setSelectedArticle] = useState(null)
+  const [textResult, setTextResult] = useState(null)
   const fileInputRef = useRef(null)
+  const mediaContainerRef = useRef(null)
+  const imgRef = useRef(null)
+  const canvasRef = useRef(null)
 
   const tools = [
     { label: 'Image Analysis', icon: Image, accept: 'image/*' },
     { label: 'Video Analysis', icon: Clapperboard, accept: 'video/*' },
-    { label: 'Source Trace', icon: Network, accept: null },
-    { label: 'Search by Keywords', icon: Keyboard, accept: null },
+    { label: 'Search by Keywords and Source Trace', icon: Keyboard, accept: null },
   ]
 
-  const verdictStyles = {
-    verified:  { label: 'Verified',   icon: CheckCircle2, color: '#16A34A', bg: 'bg-green-50',  text: 'text-green-700',  ring: 'border-green-200' },
-    misleading:{ label: 'Misleading', icon: ShieldAlert,  color: '#DC2626', bg: 'bg-red-50',    text: 'text-red-700',    ring: 'border-red-200' },
-    unverified:{ label: 'Unverified', icon: HelpCircle,   color: '#CA8A04', bg: 'bg-yellow-50', text: 'text-yellow-700', ring: 'border-yellow-200' },
+  const getMockMediaResult = (type, file) => {
+    const isImage = type === 'image'
+    const ts = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).toUpperCase()
+    const objectUrl = file ? URL.createObjectURL(file) : null
+    return {
+      type,
+      fileName: file?.name || 'unknown',
+      fileSize: file ? `${(file.size / 1024).toFixed(0)} KB` : '',
+      preview: isImage ? objectUrl : null,
+      videoUrl: !isImage ? objectUrl : null,
+      // TODO: BACKEND — كل الأرقام دي تيجي من الـ API
+      manipulationPct: isImage ? 4 : 70,
+      timestamp: ts,
+      note: isImage ? 'Lower right quadrant artifacts localized' : 'Upper right quadrant artifacts localized',
+      metrics: isImage ? [
+        { label: 'Face Consistency',   value: 72, status: 'WARNING',  borderColor: 'border-blue-400',  barColor: 'bg-blue-500' },
+        { label: 'Shadow & Lighting',  value: 45, status: 'CRITICAL', borderColor: 'border-green-500', barColor: 'bg-green-500' },
+        { label: 'Object Integrity',   value: 92, status: 'NORMAL',   borderColor: 'border-pink-400',  barColor: 'bg-pink-400' },
+        { label: 'Metadata Integrity', value: 30, status: 'CRITICAL', borderColor: 'border-red-400',   barColor: 'bg-red-400' },
+      ] : [
+        { label: 'Face Detection',     value: 68, status: 'WARNING',  borderColor: 'border-blue-400',  barColor: 'bg-blue-500' },
+        { label: 'Audio Sync',         value: 31, status: 'CRITICAL', borderColor: 'border-green-500', barColor: 'bg-green-500' },
+        { label: 'Motion Continuity',  value: 55, status: 'WARNING',  borderColor: 'border-pink-400',  barColor: 'bg-pink-400' },
+        { label: 'Frame Integrity',    value: 22, status: 'CRITICAL', borderColor: 'border-red-400',   barColor: 'bg-red-400' },
+      ],
+      authenticity: isImage ? [
+        { label: 'Metadata Reliability', value: 30, barColor: 'bg-pink-500',  textColor: 'text-pink-500' },
+        { label: 'Visual Consistency',   value: 65, barColor: 'bg-green-500', textColor: 'text-green-600' },
+        { label: 'Source Verification',  value: 88, barColor: 'bg-blue-500',  textColor: 'text-blue-600' },
+      ] : [
+        { label: 'Audio Authenticity',   value: 28, barColor: 'bg-pink-500',  textColor: 'text-pink-500' },
+        { label: 'Visual Authenticity',  value: 42, barColor: 'bg-green-500', textColor: 'text-green-600' },
+        { label: 'Source Verification',  value: 61, barColor: 'bg-blue-500',  textColor: 'text-blue-600' },
+      ],
+      tracking: isImage ? [
+        { time: 'OCT 26, 09:12', dotColor: 'bg-blue-500',  title: 'First Appearance',          desc: 'Detected on Reddit (r/worldnews). Original resolution 4000×2600.' },
+        { time: 'OCT 26, 14:30', dotColor: 'bg-green-500', title: 'Compression & Modification', desc: 'Viral spread on Telegram. Metadata stripped. Histogram anomalies detected.' },
+        { time: 'OCT 26, 18:45', dotColor: 'bg-pink-500',  title: 'Current Detection',          desc: 'Deepfake artifacts confirmed in sub-pixel analysis.' },
+      ] : [
+        { time: ts.split(',')[0] + ', 08:44', dotColor: 'bg-blue-500',  title: 'First Upload',        desc: 'Video first appeared on TikTok. Original duration 2m 14s, 1080p.' },
+        { time: ts.split(',')[0] + ', 11:20', dotColor: 'bg-green-500', title: 'Re-encoding Detected', desc: 'Video re-encoded and cropped. Audio track replaced. Shared on WhatsApp.' },
+        { time: ts.split(',')[0] + ', 12:00', dotColor: 'bg-pink-500',  title: 'Deepfake Confirmed',  desc: 'Face swap artifacts detected in frames 340–890. GAN-generated content suspected.' },
+      ],
+    }
   }
 
-  // ===== بيانات وهمية مؤقتة (تتبدل ببيانات الباك) =====
-
-  // نتيجة وحدة لتحليل الصورة
-  const imageResult = [{
-    meta: 'IMAGE ANALYSIS • UPLOADED FILE',
-    title: 'Manipulated Image Detected',
-    desc: 'Error Level Analysis reveals inconsistent compression around the central object. Metadata suggests the file was edited in Photoshop 2 days ago.',
-    confidence: 28,
-    footer: [{ icon: Camera, text: 'EXIF: Edited' }, { icon: AlertTriangle, text: 'Tampering: High' }],
-  }]
-
-  // نتيجة وحدة لتحليل الفيديو
-  const videoResult = [{
-    meta: 'VIDEO ANALYSIS • UPLOADED FILE',
-    title: 'Possible Deepfake Indicators',
-    desc: 'Frame-by-frame analysis detected unnatural facial boundary artifacts and audio-lip desync in 4 segments. Source likely synthetic.',
-    confidence: 41,
-    footer: [{ icon: FileVideo2, text: '4 flagged segments' }, { icon: AlertTriangle, text: 'Synthetic: Likely' }],
-  }]
-
-  // نتيجة وحدة لتتبع المصدر
-  const sourceResult = [{
-    meta: 'SOURCE TRACE • ORIGIN FOUND',
-    title: 'Original Source Identified',
-    desc: 'This narrative first appeared on a verified news outlet 6 hours ago. It was later reshared 1,200 times with altered captions across social platforms.',
-    confidence: 88,
-    footer: [{ icon: GitBranch, text: 'Origin: Reuters' }, { icon: Share2, text: '1.2k reshares' }],
-  }]
-
-  // عدة نتائج للبحث بالكلمات / الخبر المكتوب
-  const keywordResults = [
-    {
-      meta: 'PUBLISHED 2H AGO • BLOOMBERG INTEL',
-      title: 'Market Response to Proposed Environmental Framework Stabilizes',
-      desc: 'Initial volatility across energy stocks has subsided as analysts dissect the specific...',
-      confidence: 92,
-      footer: [{ icon: Link2, text: '12 Citations' }, { icon: Share2, text: 'Viral potential: Low' }],
-    },
-    {
-      meta: 'PUBLISHED 4H AGO • UNKNOWN SOURCE (SOCIAL)',
-      title: 'Massive Vehicle Confiscation Plan Leaked from Council Meeting',
-      desc: 'A viral thread circulating on encrypted platforms claims a secret addendum to the...',
-      confidence: 12,
-      footer: [{ icon: AlertTriangle, text: 'Misinformation High Risk' }, { icon: Users, text: '2.4k Bot Mentions' }],
-    },
-    {
-      meta: 'PUBLISHED 7H AGO • REUTERS',
-      title: 'Officials Confirm Routine Policy Review, Deny Leak Claims',
-      desc: 'A government spokesperson described the circulating documents as fabricated and unrelated to any active policy...',
-      confidence: 81,
-      footer: [{ icon: Link2, text: '8 Citations' }, { icon: Share2, text: 'Viral potential: Medium' }],
-    },
-    {
-      meta: 'PUBLISHED 1D AGO • AP NEWS',
-      title: 'Fact Check: No Evidence Supports Viral Confiscation Rumor',
-      desc: 'Independent fact-checkers traced the claim to a single anonymous post with no corroborating documentation...',
-      confidence: 76,
-      footer: [{ icon: Link2, text: '15 Citations' }, { icon: Share2, text: 'Viral potential: Low' }],
-    },
+  const getMockSearchResults = (keyword) => [
+    { meta: 'PUBLISHED 2H AGO • BLOOMBERG INTEL', title: `Latest developments: ${keyword}`, desc: 'Comprehensive coverage from verified sources. Multiple independent journalists confirmed through primary documentation.', citations: 12 },
+    { meta: 'PUBLISHED 4H AGO • CNN NEWS',        title: `Eyewitness accounts confirm: ${keyword}`, desc: 'Ground reports and satellite imagery analyzed. Source credibility rated high based on historical accuracy.', citations: 8 },
+    { meta: 'PUBLISHED 6H AGO • REUTERS',         title: `International response to: ${keyword}`, desc: 'Officials and international bodies have issued statements. Timeline cross-referenced with verified social media records.', citations: 15 },
+    { meta: 'PUBLISHED 8H AGO • AP NEWS',         title: `Fact-check: Claims about ${keyword}`, desc: 'Independent fact-checkers traced the claim to primary sources. Viral versions contained altered captions.', citations: 11 },
   ]
+
+
+
+  // ===== تحليل النص بالفرونت =====
+  const MISLEADING_WORDS = [
+    'fake','hoax','lie','lies','lied','lying','fabricated','manipulated','doctored',
+    'conspiracy','coverup','cover-up','false','untrue','misleading','propaganda',
+    'staged','scripted','crisis actor','deep state','new world order',
+  ]
+  const BIAS_WORDS = [
+    'outrageous','shocking','explosive','alarming','devastating','catastrophic',
+    'incredible','unbelievable','massive','absolutely','terrible','horrible',
+    'disgraceful','stunning','radical','extreme','evil','corrupt',
+  ]
+  const CREDIBLE_MARKERS = [
+    'according to','confirmed by','verified','official statement','press release',
+    'peer-reviewed','cited sources','data shows','research indicates','study found',
+    'government confirmed','court records','documented','evidence shows',
+  ]
+
+  const analyzeTextContent = (text) => {
+    const lower = text.toLowerCase()
+    const words = lower.split(/\s+/).filter(Boolean)
+    const sentences = text.split(/[.!?]+/).filter(s => s.trim())
+
+    // فحص كلمات التضليل
+    const misleadingFound = MISLEADING_WORDS.filter(w => lower.includes(w))
+    const biasFound = BIAS_WORDS.filter(w => lower.includes(w))
+    const credibleFound = CREDIBLE_MARKERS.filter(m => lower.includes(m))
+
+    // حساب النسب
+    const misleadingScore = Math.min(100, misleadingFound.length * 15 + biasFound.length * 8)
+    const credibilityScore = Math.max(0, Math.min(100, 70 + credibleFound.length * 10 - misleadingFound.length * 12 - biasFound.length * 5))
+    const neutralityScore = Math.max(0, 100 - biasFound.length * 10 - misleadingFound.length * 15)
+
+    // تحديد الحكم
+    let verdict, verdictColor
+    if (misleadingScore > 60 || credibilityScore < 30) {
+      verdict = 'HIGH MISINFORMATION RISK'
+      verdictColor = 'text-red-600 bg-red-50 border-red-200'
+    } else if (misleadingScore > 30 || credibilityScore < 60) {
+      verdict = 'PARTIALLY MISLEADING'
+      verdictColor = 'text-orange-600 bg-orange-50 border-orange-200'
+    } else {
+      verdict = 'LIKELY CREDIBLE'
+      verdictColor = 'text-green-600 bg-green-50 border-green-200'
+    }
+
+    return {
+      verdict, verdictColor,
+      misleadingScore,
+      credibilityScore,
+      neutralityScore,
+      wordCount: words.length,
+      sentenceCount: sentences.length,
+      misleadingWords: misleadingFound,
+      biasWords: biasFound,
+      credibleMarkers: credibleFound,
+    }
+  }
+
+  // ✅ Heatmap حقيقية بالـ Canvas — ترسم طبقة حرارية فوق الصورة
+  const generateHeatmap = useCallback((imgEl, canvasEl, manipulationPct) => {
+    if (!imgEl || !canvasEl) return
+    const ctx = canvasEl.getContext('2d')
+    const w = imgEl.naturalWidth || imgEl.width
+    const h = imgEl.naturalHeight || imgEl.height
+    canvasEl.width = w
+    canvasEl.height = h
+
+    // ارسم الصورة الأصلية
+    ctx.drawImage(imgEl, 0, 0, w, h)
+
+    // بيانات وهمية لمناطق التلاعب — TODO: BACKEND يرجّع الإحداثيات الحقيقية
+    const regions = manipulationPct > 30 ? [
+      { x: w * 0.55, y: h * 0.05, r: w * 0.22, intensity: 0.75 },
+      { x: w * 0.70, y: h * 0.20, r: w * 0.15, intensity: 0.60 },
+      { x: w * 0.40, y: h * 0.60, r: w * 0.18, intensity: 0.45 },
+      { x: w * 0.80, y: h * 0.70, r: w * 0.12, intensity: 0.35 },
+    ] : [
+      { x: w * 0.75, y: h * 0.80, r: w * 0.10, intensity: 0.30 },
+      { x: w * 0.85, y: h * 0.65, r: w * 0.08, intensity: 0.20 },
+    ]
+
+    // ارسم كل منطقة كـ radial gradient ملوّن
+    regions.forEach(({ x, y, r, intensity }) => {
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, r)
+      if (intensity > 0.6) {
+        grad.addColorStop(0,   `rgba(255, 0,   0,   ${intensity})`)
+        grad.addColorStop(0.4, `rgba(255, 100, 0,   ${intensity * 0.7})`)
+        grad.addColorStop(0.7, `rgba(255, 200, 0,   ${intensity * 0.4})`)
+        grad.addColorStop(1,   `rgba(255, 255, 0,   0)`)
+      } else if (intensity > 0.35) {
+        grad.addColorStop(0,   `rgba(255, 165, 0,   ${intensity})`)
+        grad.addColorStop(0.5, `rgba(255, 220, 0,   ${intensity * 0.5})`)
+        grad.addColorStop(1,   `rgba(255, 255, 0,   0)`)
+      } else {
+        grad.addColorStop(0,   `rgba(0,   200, 100, ${intensity})`)
+        grad.addColorStop(0.5, `rgba(0,   255, 150, ${intensity * 0.4})`)
+        grad.addColorStop(1,   `rgba(0,   255, 0,   0)`)
+      }
+      ctx.fillStyle = grad
+      ctx.fillRect(Math.max(0, x - r), Math.max(0, y - r), r * 2, r * 2)
+    })
+  }, [])
 
   const handleToolClick = (tool) => {
     setActiveTool(tool.label)
+    setResults(null); setMediaResult(null); setTextResult(null); setQuery(''); setFiles([]); setHeatmap(false); setZoom(1)
     if (tool.accept && fileInputRef.current) {
       fileInputRef.current.setAttribute('accept', tool.accept)
       fileInputRef.current.click()
@@ -98,73 +198,115 @@ function VerifyNews() {
   }
 
   const clearTool = () => {
-    setActiveTool(null)
-    setFiles([])
+    setActiveTool(null); setFiles([]); setResults(null); setMediaResult(null)
+    setQuery(''); setIsAnalyzing(false); setHeatmap(false); setZoom(1)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleFileChange = (e) => {
     const selected = Array.from(e.target.files)
-    if (selected.length === 0) return
-    const expected = activeTool === 'Image Analysis' ? 'image/'
-      : activeTool === 'Video Analysis' ? 'video/' : null
-    const valid = expected ? selected.filter((f) => f.type.startsWith(expected)) : selected
-    const mapped = valid.map((f) => ({
-      file: f,
-      preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
-    }))
-    setFiles((prev) => [...prev, ...mapped])
+    if (!selected.length) return
+    const isImage = activeTool === 'Image Analysis'
+    const valid = selected.filter(f => isImage ? f.type.startsWith('image/') : f.type.startsWith('video/'))
+    const mapped = valid.map(f => ({ file: f, preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null }))
+    setFiles(prev => [...prev, ...mapped])
     e.target.value = ''
   }
 
-  const removeFile = (index) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  const handleSubmit = () => {
-    if (!query.trim() && files.length === 0) return
-
-    const payload = { text: query, files: files.map((f) => f.file), tool: activeTool }
-    console.log('Verify payload:', payload)
-
-    // TODO: استدعاء الباك إند هنا. الباك يرجّع الحكم + النتائج المناسبة للأداة.
-    // مؤقتاً نختار البيانات الوهمية حسب الأداة:
-    if (activeTool === 'Image Analysis') {
-      setResultMode('single'); setResults(imageResult)
-      setVerdict({ type: 'misleading', confidence: 28, summary: 'This image shows clear signs of digital manipulation. Edited regions were detected around the main subject.' })
-    } else if (activeTool === 'Video Analysis') {
-      setResultMode('single'); setResults(videoResult)
-      setVerdict({ type: 'unverified', confidence: 41, summary: 'Synthetic media indicators detected. Manual review recommended before drawing conclusions.' })
-    } else if (activeTool === 'Source Trace') {
-      setResultMode('single'); setResults(sourceResult)
-      setVerdict({ type: 'verified', confidence: 88, summary: 'The original source was successfully traced to a trusted outlet. Later versions were altered in reshares.' })
-    } else {
-      // Search by Keywords أو خبر مكتوب → عدة نتائج
-      setResultMode('multi'); setResults(keywordResults)
-      setVerdict({ type: 'unverified', confidence: 54, summary: 'Mixed signals across sources. Some trusted outlets confirm, while social posts show high misinformation risk.' })
+  const handleSubmit = async () => {
+    if (!query.trim() && !files.length) return
+    setIsAnalyzing(true)
+    // TODO: BACKEND — استبدل بالاستدعاء الحقيقي
+    await new Promise(r => setTimeout(r, 1200))
+    if (activeTool === 'Image Analysis' || activeTool === 'Video Analysis') {
+      const type = activeTool === 'Image Analysis' ? 'image' : 'video'
+      setMediaResult(getMockMediaResult(type, files[0]?.file))
+    } else if (activeTool === 'Text Analysis') {
+      if (query.trim()) setTextResult(analyzeTextContent(query))
+    } else if (activeTool === 'Search by Keywords and Source Trace') {
+      setResults(getMockSearchResults(query || 'latest news'))
+      setPage(1)
+    } else if (!activeTool && query.trim()) {
+      // لو ما في أداة مختارة وفي نص → يحلله تلقائياً
+      setTextResult(analyzeTextContent(query))
     }
+    setIsAnalyzing(false)
   }
 
-  const visibleTools = activeTool ? tools.filter((t) => t.label === activeTool) : tools
+  // ✅ ZoomIn — يكبّر الصورة/الفيديو بضغطة
+  const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.25, 3))
+
+  // ✅ Maximize — يفتح الصورة/الفيديو بالحجم الكامل في تاب جديد
+  const handleMaximize = () => {
+    const url = mediaResult?.preview || mediaResult?.videoUrl
+    if (url) window.open(url, '_blank')
+  }
+
+  // ✅ Download media — يحمّل الملف الأصلي
+  const handleDownloadMedia = () => {
+    const url = mediaResult?.preview || mediaResult?.videoUrl
+    if (!url) return
+    const a = document.createElement('a')
+    a.href = url
+    a.download = mediaResult.fileName
+    a.click()
+  }
+
+  // ✅ Download Forensic Report — يحمّل تقرير نصي بالنتائج
+  const downloadReport = () => {
+    if (!mediaResult) return
+    const lines = [
+      'MANARA FORENSIC REPORT',
+      '======================',
+      `File: ${mediaResult.fileName}`,
+      `Size: ${mediaResult.fileSize}`,
+      `Timestamp: ${mediaResult.timestamp}`,
+      `AI Manipulation Detected: ${mediaResult.manipulationPct}%`,
+      '',
+      'METRICS',
+      '-------',
+      ...mediaResult.metrics.map(m => `${m.label}: ${m.value}% [${m.status}]`),
+      '',
+      'AUTHENTICITY BREAKDOWN',
+      '----------------------',
+      ...mediaResult.authenticity.map(a => `${a.label}: ${a.value}%`),
+      '',
+      'SOURCE TRACKING',
+      '---------------',
+      ...mediaResult.tracking.map(t => `[${t.time}] ${t.title}: ${t.desc}`),
+      '',
+      'NOTE: Full forensic analysis requires backend processing.',
+    ]
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `forensic-report-${mediaResult.fileName}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const statusStyle = (s) => ({
+    WARNING:  { text: 'text-orange-500', bg: 'bg-orange-50' },
+    CRITICAL: { text: 'text-red-500',    bg: 'bg-red-50' },
+    NORMAL:   { text: 'text-green-600',  bg: 'bg-green-50' },
+  }[s] || { text: 'text-gray-500', bg: 'bg-gray-50' })
+
+  const ITEMS = 2
+  const totalPages = Math.ceil((results || []).length / ITEMS)
+  const paginated = (results || []).slice((page - 1) * ITEMS, page * ITEMS)
 
   return (
     <div className="flex min-h-screen bg-[#f4f6fb]" dir="ltr">
-
-      {/* Sidebar */}
       <Sidebar />
-
-      {/* Main */}
       <main className="flex-1 px-8 py-6">
 
         {/* Topbar */}
-        <div className="flex items-center justify-between gap-6 mb-8">
+        <div className="flex items-center justify-between gap-6 mb-6">
           <div className="relative flex-1 max-w-3xl mx-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input
-              type="text"
-              placeholder="Scan URL, keyword, or source..."
-              className="w-full pl-12 pr-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:border-blue-500"
-            />
+            <input type="text" placeholder="Scan URL, keyword, or source..."
+              className="w-full pl-12 pr-4 py-3 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:border-blue-500" />
           </div>
           <button className="relative p-2 text-gray-600 hover:text-blue-600 transition">
             <Bell size={22} />
@@ -172,27 +314,23 @@ function VerifyNews() {
           </button>
         </div>
 
-        {/* Hero / search card */}
-        <div className="bg-white rounded-3xl shadow-sm w-full px-10 py-10 mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-3">Find the Truth Behind the Headlines</h1>
-          <p className="text-gray-500 mb-6">
-            Use keywords or article titles to explore trusted sources and fact-check information.
-          </p>
+        {/* Hero card */}
+        <div className="bg-white rounded-3xl shadow-sm w-full px-10 py-8 mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 mb-1">Find the Truth Behind the Headlines</h1>
+          <p className="text-gray-500 mb-6 text-sm">Use keywords or article titles to explore trusted sources and fact-check information.</p>
 
           <input type="file" ref={fileInputRef} multiple className="hidden" onChange={handleFileChange} />
 
           {files.length > 0 && (
             <div className="flex flex-wrap gap-3 mb-4">
               {files.map((f, i) => (
-                <div key={i} className="relative w-16 h-16 rounded-xl overflow-hidden border border-gray-200">
-                  {f.preview ? (
-                    <img src={f.preview} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full bg-blue-100 flex items-center justify-center">
-                      <Clapperboard size={22} className="text-blue-600" />
-                    </div>
-                  )}
-                  <button onClick={() => removeFile(i)} className="absolute top-0.5 right-0.5 w-4 h-4 bg-white rounded-full flex items-center justify-center text-red-500 shadow">
+                <div key={i} className="relative w-16 h-16 rounded-xl overflow-hidden border-2 border-blue-200">
+                  {f.preview
+                    ? <img src={f.preview} alt="" className="w-full h-full object-cover" />
+                    : <div className="w-full h-full bg-blue-100 flex items-center justify-center"><Clapperboard size={22} className="text-blue-600" /></div>
+                  }
+                  <button onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))}
+                    className="absolute top-0.5 right-0.5 w-4 h-4 bg-white rounded-full flex items-center justify-center text-red-500 shadow">
                     <X size={11} />
                   </button>
                 </div>
@@ -200,51 +338,51 @@ function VerifyNews() {
             </div>
           )}
 
-          <div className="flex items-center gap-3 bg-[#f4f6fb] rounded-2xl px-5 py-3 mb-6">
-            <button
-              onClick={() => {
-                if (fileInputRef.current) {
-                  const accept = activeTool === 'Image Analysis' ? 'image/*'
-                    : activeTool === 'Video Analysis' ? 'video/*' : 'image/*,video/*'
-                  fileInputRef.current.setAttribute('accept', accept)
-                  fileInputRef.current.click()
-                }
-              }}
-              className="text-gray-400 hover:text-blue-600 transition shrink-0"
-            >
+          <div className="flex items-center gap-3 bg-[#f4f6fb] rounded-2xl px-5 py-3 mb-5">
+            <button onClick={() => {
+              if (fileInputRef.current) {
+                fileInputRef.current.setAttribute('accept',
+                  activeTool === 'Image Analysis' ? 'image/*' :
+                  activeTool === 'Video Analysis' ? 'video/*' : 'image/*,video/*')
+                fileInputRef.current.click()
+              }
+            }} className="text-gray-400 hover:text-blue-600 transition shrink-0">
               <Plus size={22} />
             </button>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-              placeholder="Write here..."
-              className="flex-1 bg-transparent outline-none text-sm text-gray-700"
-            />
-            <button onClick={handleSubmit} className="w-10 h-10 bg-blue-600 hover:bg-blue-700 transition rounded-full flex items-center justify-center text-white shrink-0">
-              <Send size={18} />
+            <input type="text" value={query} onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+              placeholder={
+                activeTool === 'Image Analysis' ? 'Analyse this image' :
+                activeTool === 'Video Analysis' ? 'Analyse this video' :
+                activeTool === 'Text Analysis' ? 'Paste your text or news article here...' :
+                activeTool === 'Search by Keywords and Source Trace' ? 'Enter keywords to search...' :
+                'Write or paste any text to analyse it...'
+              }
+              className="flex-1 bg-transparent outline-none text-sm text-gray-700" />
+            <button onClick={handleSubmit} disabled={isAnalyzing}
+              className="w-10 h-10 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition rounded-full flex items-center justify-center text-white shrink-0">
+              {isAnalyzing
+                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                : <Send size={18} />
+              }
             </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {visibleTools.map((tool) => {
+            {tools.map((tool) => {
               const Icon = tool.icon
               const isActive = activeTool === tool.label
               return (
                 <div key={tool.label} className="relative">
-                  <button
-                    onClick={() => handleToolClick(tool)}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-sm transition ${
-                      isActive ? 'bg-blue-600 text-white' : 'bg-[#f4f6fb] text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    <Icon size={18} className={isActive ? 'text-white' : 'text-gray-500'} />
+                  <button onClick={() => handleToolClick(tool)}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-sm transition font-medium ${isActive ? 'bg-blue-600 text-white' : 'bg-[#f4f6fb] text-gray-700 hover:bg-gray-100 border border-gray-200'}`}>
+                    <Icon size={17} className={isActive ? 'text-white' : 'text-gray-500'} />
                     {tool.label}
                   </button>
                   {isActive && (
-                    <button onClick={clearTool} className="absolute -top-1 -right-1 w-4 h-4 bg-red-100 rounded-full flex items-center justify-center text-red-500">
-                      <X size={11} />
+                    <button onClick={clearTool}
+                      className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center text-white shadow">
+                      <X size={10} />
                     </button>
                   )}
                 </div>
@@ -253,64 +391,386 @@ function VerifyNews() {
           </div>
         </div>
 
-        {/* Verdict card */}
-        {verdict && (() => {
-          const v = verdictStyles[verdict.type]
-          const VIcon = v.icon
-          return (
-            <div className={`${v.bg} border ${v.ring} rounded-2xl p-6 mb-8 flex items-start gap-4`}>
-              <VIcon size={40} style={{ color: v.color }} className="shrink-0" />
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-1">
-                  <span className={`text-xl font-bold ${v.text}`}>{v.label}</span>
-                  <span className="text-sm font-semibold text-gray-500">{verdict.confidence}% confidence</span>
+        {/* Loading */}
+        {isAnalyzing && (
+          <div className="bg-white rounded-3xl shadow-sm p-12 mb-8 flex flex-col items-center justify-center gap-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-gray-500 font-medium">Analyzing... please wait</p>
+          </div>
+        )}
+
+        {/* Image / Video Result */}
+        {mediaResult && !isAnalyzing && (
+          <div className="bg-white rounded-3xl shadow-sm p-6 mb-8">
+
+            {/* File info */}
+            <div className="flex items-center gap-2 mb-4 text-sm text-gray-500">
+              <span className="font-semibold text-gray-700">{mediaResult.fileName}</span>
+              <span>•</span>
+              <span>{mediaResult.fileSize}</span>
+            </div>
+
+            {/* Media — image or video */}
+            <div ref={mediaContainerRef} className="relative rounded-2xl overflow-hidden mb-4 bg-gray-900" style={{ minHeight: '280px' }}>
+              {mediaResult.type === 'image' && mediaResult.preview ? (
+                <div className="overflow-auto w-full relative" style={{ maxHeight: '480px' }}>
+                  {/* الصورة الأصلية */}
+                  <img
+                    ref={imgRef}
+                    src={mediaResult.preview}
+                    alt="analysis"
+                    onLoad={() => {
+                      if (heatmap && canvasRef.current && imgRef.current)
+                        generateHeatmap(imgRef.current, canvasRef.current, mediaResult.manipulationPct)
+                    }}
+                    style={{
+                      width: '100%',
+                      display: heatmap ? 'none' : 'block',
+                      transform: `scale(${zoom})`,
+                      transformOrigin: 'top left',
+                      transition: 'transform 0.2s',
+                    }}
+                  />
+                  {/* Canvas للـ Heatmap */}
+                  <canvas
+                    ref={canvasRef}
+                    style={{
+                      width: '100%',
+                      display: heatmap ? 'block' : 'none',
+                      transform: `scale(${zoom})`,
+                      transformOrigin: 'top left',
+                      transition: 'transform 0.2s',
+                    }}
+                  />
                 </div>
-                <p className="text-gray-600 text-sm leading-relaxed">{verdict.summary}</p>
+              ) : mediaResult.type === 'video' && mediaResult.videoUrl ? (
+                <div className="relative">
+                  <video
+                    src={mediaResult.videoUrl}
+                    controls
+                    style={{ width: '100%', maxHeight: '480px', display: 'block', background: '#000' }}
+                  />
+                  {/* TODO: BACKEND — overlay حرارية حقيقية تيجي من تحليل الفيديو */}
+                  {heatmap && (
+                    <div className="absolute inset-0 pointer-events-none" style={{ mixBlendMode: 'multiply' }}>
+                      <div style={{ position: 'absolute', top: '8%', right: '15%', width: '25%', height: '30%',
+                        background: 'radial-gradient(ellipse, rgba(255,0,0,0.55) 0%, rgba(255,100,0,0.3) 50%, transparent 100%)' }} />
+                      <div style={{ position: 'absolute', top: '40%', right: '5%', width: '20%', height: '25%',
+                        background: 'radial-gradient(ellipse, rgba(255,150,0,0.5) 0%, rgba(255,200,0,0.25) 50%, transparent 100%)' }} />
+                      <div style={{ position: 'absolute', bottom: '20%', left: '30%', width: '18%', height: '22%',
+                        background: 'radial-gradient(ellipse, rgba(0,200,100,0.4) 0%, rgba(0,255,0,0.2) 50%, transparent 100%)' }} />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="w-full h-64 flex items-center justify-center text-gray-500">
+                  <Clapperboard size={48} />
+                </div>
+              )}
+
+              {/* Badges */}
+              <div className="absolute top-4 left-4 flex items-center gap-2 z-10">
+                <span className="bg-black/70 text-white text-xs px-3 py-1.5 rounded-full font-medium">{mediaResult.timestamp}</span>
+                <span className="bg-red-500 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5 font-medium">
+                  <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" /> LIVE ANALYZING
+                </span>
+              </div>
+              <div className="absolute bottom-4 right-4 z-10">
+                <div className="bg-white/95 backdrop-blur text-gray-900 text-sm font-bold px-4 py-2 rounded-xl shadow">
+                  AI Manipulation Detected:{' '}
+                  <span className={mediaResult.manipulationPct > 30 ? 'text-red-600' : 'text-green-600'}>
+                    {mediaResult.manipulationPct}%
+                  </span>
+                </div>
               </div>
             </div>
-          )
-        })()}
 
-        {/* Results */}
-        {results && (
-          <div>
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-2xl font-bold text-gray-900">
-                {resultMode === 'single' ? 'Analysis Result' : 'Search Results (42 hits)'}
-              </h2>
-              {resultMode === 'multi' && (
-                <div className="flex items-center gap-2">
-                  <button className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 transition"><LayoutGrid size={18} /></button>
-                  <button className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 transition"><List size={18} /></button>
+            {/* Controls row */}
+            <div className="flex items-center justify-between mb-6 py-3 border-b border-gray-100">
+              <div className="flex items-center gap-4">
+                {/* Heatmap toggle — للصور والفيديو */}
+                {(mediaResult.type === 'image' || mediaResult.type === 'video') && (
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-medium ${!heatmap ? 'text-blue-600' : 'text-gray-400'}`}>Original</span>
+                    <button onClick={() => setHeatmap(!heatmap)}
+                      className={`w-11 h-6 rounded-full transition-colors relative ${heatmap ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${heatmap ? 'left-6' : 'left-1'}`} />
+                    </button>
+                    <span className={`text-sm font-medium ${heatmap ? 'text-blue-600' : 'text-gray-400'}`}>Heatmap</span>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div className="flex items-center gap-1">
+                  {/* ZoomIn — للصور فقط */}
+                  {mediaResult.type === 'image' && (
+                    <button onClick={handleZoomIn} title="Zoom In"
+                      className="p-1.5 hover:bg-gray-100 rounded-lg transition text-gray-500">
+                      <ZoomIn size={16} />
+                    </button>
+                  )}
+                  {/* Maximize — يفتح بتاب جديد */}
+                  <button onClick={handleMaximize} title="Open in new tab"
+                    className="p-1.5 hover:bg-gray-100 rounded-lg transition text-gray-500">
+                    <Maximize2 size={16} />
+                  </button>
+                  {/* Download الملف الأصلي */}
+                  <button onClick={handleDownloadMedia} title="Download original file"
+                    className="p-1.5 hover:bg-gray-100 rounded-lg transition text-gray-500">
+                    <Download size={16} />
+                  </button>
+                </div>
+
+                {/* Reset zoom */}
+                {zoom > 1 && (
+                  <button onClick={() => setZoom(1)} className="text-xs text-blue-600 hover:underline">Reset zoom</button>
+                )}
+              </div>
+              <span className="text-xs text-gray-400 flex items-center gap-1">
+                <Clock size={12} /> {mediaResult.note}
+              </span>
+            </div>
+
+            {/* 4 Metric cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              {mediaResult.metrics.map((m) => {
+                const { text, bg } = statusStyle(m.status)
+                return (
+                  <div key={m.label} className={`border-2 ${m.borderColor} rounded-2xl p-4`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <Activity size={16} className="text-gray-400" />
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${text} ${bg}`}>{m.status}</span>
+                    </div>
+                    <p className="text-sm text-gray-500 mb-1">{m.label}</p>
+                    <p className="text-2xl font-bold text-gray-900 mb-3">{m.value}%</p>
+                    <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className={`h-full ${m.barColor} rounded-full`} style={{ width: `${m.value}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Authenticity + Source Tracking */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+              <div className="border border-gray-100 rounded-2xl p-6">
+                <div className="flex items-center gap-2 font-bold text-gray-900 mb-5">
+                  <BarChart2 size={18} className="text-blue-600" /> Authenticity Breakdown
+                </div>
+                <div className="flex flex-col gap-5">
+                  {mediaResult.authenticity.map((a) => (
+                    <div key={a.label}>
+                      <div className="flex items-center justify-between text-sm mb-2">
+                        <span className="text-gray-600">{a.label}</span>
+                        <span className={`font-bold ${a.textColor}`}>{a.value}%</span>
+                      </div>
+                      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full ${a.barColor} rounded-full`} style={{ width: `${a.value}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border border-gray-100 rounded-2xl p-6">
+                <div className="flex items-center gap-2 font-bold text-gray-900 mb-5">
+                  <RefreshCw size={18} className="text-blue-600" /> Source Tracking
+                </div>
+                <div className="flex flex-col">
+                  {mediaResult.tracking.map((t, i) => (
+                    <div key={i} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className={`w-3 h-3 rounded-full ${t.dotColor} shrink-0 mt-1.5`} />
+                        {i < mediaResult.tracking.length - 1 && <div className="w-px flex-1 bg-gray-200 my-1 min-h-[20px]" />}
+                      </div>
+                      <div className="pb-4">
+                        <p className="text-xs text-blue-600 font-semibold mb-0.5">{t.time}</p>
+                        <p className="text-sm font-bold text-gray-900 mb-0.5">{t.title}</p>
+                        <p className="text-xs text-gray-500 leading-relaxed">{t.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <button onClick={downloadReport}
+              className="w-full bg-blue-600 hover:bg-blue-700 transition text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 mb-3 text-sm">
+              <Download size={18} /> Download Forensic Report
+            </button>
+            <button onClick={() => { setMediaResult(null); setFiles([]); setQuery(''); setHeatmap(false); setZoom(1) }}
+              className="w-full border-2 border-blue-600 text-blue-600 hover:bg-blue-50 transition font-bold py-3 rounded-2xl flex items-center justify-center gap-2 text-sm">
+              <PlusCircle size={18} /> New Investigation
+            </button>
+          </div>
+        )}
+
+
+        {/* Text Analysis Result */}
+        {textResult && !isAnalyzing && (
+          <div className="bg-white rounded-3xl shadow-sm p-8 mb-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Text Analysis Result</h2>
+
+            {/* Verdict */}
+            <div className={`border-2 rounded-2xl p-5 mb-6 flex items-center gap-4 ${textResult.verdictColor}`}>
+              <div className="text-3xl">
+                {textResult.verdict.includes('HIGH') ? '🚨' : textResult.verdict.includes('PARTIALLY') ? '⚠️' : '✅'}
+              </div>
+              <div>
+                <p className="text-xl font-bold">{textResult.verdict}</p>
+                <p className="text-sm mt-1 opacity-80">
+                  {textResult.wordCount} words · {textResult.sentenceCount} sentences analyzed
+                </p>
+              </div>
+            </div>
+
+            {/* Score bars */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
+              {[
+                { label: 'Misinformation Risk', value: textResult.misleadingScore, color: 'bg-red-500', textColor: 'text-red-600' },
+                { label: 'Credibility Score',   value: textResult.credibilityScore, color: 'bg-blue-500', textColor: 'text-blue-600' },
+                { label: 'Neutrality Score',    value: textResult.neutralityScore,  color: 'bg-green-500', textColor: 'text-green-600' },
+              ].map((s) => (
+                <div key={s.label} className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-medium text-gray-600">{s.label}</span>
+                    <span className={`text-xl font-bold ${s.textColor}`}>{s.value}%</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className={`h-full ${s.color} rounded-full transition-all`} style={{ width: `${s.value}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Detected words */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              {textResult.misleadingWords.length > 0 && (
+                <div className="border border-red-100 bg-red-50 rounded-2xl p-5">
+                  <p className="font-bold text-red-700 mb-3">🚨 Misleading Indicators</p>
+                  <div className="flex flex-wrap gap-2">
+                    {textResult.misleadingWords.map(w => (
+                      <span key={w} className="bg-red-100 text-red-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {textResult.biasWords.length > 0 && (
+                <div className="border border-orange-100 bg-orange-50 rounded-2xl p-5">
+                  <p className="font-bold text-orange-700 mb-3">⚠️ Bias Language</p>
+                  <div className="flex flex-wrap gap-2">
+                    {textResult.biasWords.map(w => (
+                      <span key={w} className="bg-orange-100 text-orange-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {textResult.credibleMarkers.length > 0 && (
+                <div className="border border-green-100 bg-green-50 rounded-2xl p-5">
+                  <p className="font-bold text-green-700 mb-3">✅ Credibility Markers</p>
+                  <div className="flex flex-wrap gap-2">
+                    {textResult.credibleMarkers.map(w => (
+                      <span key={w} className="bg-green-100 text-green-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {textResult.misleadingWords.length === 0 && textResult.biasWords.length === 0 && textResult.credibleMarkers.length === 0 && (
+                <div className="border border-gray-100 bg-gray-50 rounded-2xl p-5 col-span-3">
+                  <p className="text-gray-500 text-sm">No significant indicators detected. Add more content for a detailed analysis.</p>
                 </div>
               )}
             </div>
 
-            <div className="flex flex-col gap-5">
-              {results.map((r, i) => (
-                <div key={i} className="bg-white rounded-2xl p-5 flex gap-5 relative">
-                  <div className="w-40 h-32 rounded-xl bg-gray-900 shrink-0" />
+            <button onClick={() => { setTextResult(null); setQuery('') }}
+              className="w-full mt-6 border-2 border-blue-600 text-blue-600 hover:bg-blue-50 transition font-bold py-3 rounded-2xl flex items-center justify-center gap-2 text-sm">
+              <PlusCircle size={18} /> Analyse New Text
+            </button>
+          </div>
+        )}
+
+        {/* Search Results */}
+        {results && !isAnalyzing && (
+          <div>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-2xl font-bold text-gray-900">Search Results ({results.length * 10} hits)</h2>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setViewMode('grid')}
+                  className={`p-2 rounded-lg border transition ${viewMode === 'grid' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
+                  <LayoutGrid size={18} />
+                </button>
+                <button onClick={() => setViewMode('list')}
+                  className={`p-2 rounded-lg border transition ${viewMode === 'list' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
+                  <List size={18} />
+                </button>
+              </div>
+            </div>
+            <div className={viewMode === 'grid' ? 'grid grid-cols-2 gap-4 mb-6' : 'flex flex-col gap-4 mb-6'}>
+              {paginated.map((r, i) => (
+                <div key={i}
+                  onClick={() => setSelectedArticle(r)}
+                  className={`bg-white rounded-2xl cursor-pointer hover:shadow-md transition ${viewMode === 'grid' ? 'p-4 flex flex-col' : 'p-5 flex gap-5'}`}>
+                  <div className={`bg-gradient-to-br from-gray-700 to-gray-900 rounded-xl shrink-0 ${viewMode === 'grid' ? 'w-full h-40 mb-4' : 'w-36 h-28'}`} />
                   <div className="flex-1">
                     <p className="text-[11px] font-semibold text-gray-400 tracking-wide mb-2">{r.meta}</p>
-                    <h3 className="text-xl font-bold text-gray-900 leading-snug mb-2">{r.title}</h3>
-                    <p className="text-gray-500 text-sm mb-4">{r.desc}</p>
-                    <div className="flex items-center gap-6 text-gray-500 text-sm">
-                      {r.footer.map((f, j) => {
-                        const FIcon = f.icon
-                        return (
-                          <span key={j} className="flex items-center gap-1.5">
-                            <FIcon size={15} /> {f.text}
-                          </span>
-                        )
-                      })}
+                    <h3 className={`font-bold text-gray-900 leading-snug mb-2 ${viewMode === 'grid' ? 'text-base' : 'text-xl'}`}>{r.title}</h3>
+                    <p className="text-gray-500 text-sm mb-3 line-clamp-2">{r.desc}</p>
+                    <div className="flex items-center gap-4 text-gray-500 text-sm">
+                      <span className="flex items-center gap-1.5"><Link2 size={14} /> {r.citations} Citations</span>
+                      <span className="flex items-center gap-1.5 hover:text-blue-600 transition"><Share2 size={14} /> Share</span>
                     </div>
-                  </div>
-                  <div className="absolute top-5 right-5 border border-gray-200 rounded-lg px-3 py-1.5 text-center">
-                    <p className="font-bold text-sm text-gray-900">{r.confidence}%</p>
-                    <p className="text-[9px] text-gray-400 tracking-wide">CONFIDENCE</p>
                   </div>
                 </div>
               ))}
+            </div>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 pb-6">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                  <button key={p} onClick={() => setPage(p)}
+                    className={`h-3 rounded-full transition-all ${p === page ? 'bg-blue-600 w-6' : 'bg-gray-300 hover:bg-gray-400 w-3'}`} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+
+        {/* Article Popup */}
+        {selectedArticle && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-6" onClick={() => setSelectedArticle(null)}>
+            <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl"
+              onClick={e => e.stopPropagation()}>
+
+              {/* Article image */}
+              <div className="w-full h-56 bg-gradient-to-br from-gray-700 to-gray-900 rounded-t-3xl relative">
+                <button onClick={() => setSelectedArticle(null)}
+                  className="absolute top-4 right-4 w-9 h-9 bg-white/20 hover:bg-white/40 transition rounded-full flex items-center justify-center text-white">
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="p-8">
+                <p className="text-xs font-semibold text-gray-400 tracking-wide mb-3">{selectedArticle.meta}</p>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4 leading-snug">{selectedArticle.title}</h2>
+                <p className="text-gray-600 leading-relaxed mb-6">{selectedArticle.desc}</p>
+                <p className="text-gray-500 text-sm leading-relaxed mb-6">
+                  Additional context and full investigation details will be available once backend processing is complete.
+                  This article has been cross-referenced with {selectedArticle.citations} independent sources.
+                </p>
+
+                <div className="flex items-center justify-between pt-5 border-t border-gray-100">
+                  <div className="flex items-center gap-4 text-gray-500 text-sm">
+                    <span className="flex items-center gap-1.5"><Link2 size={15} /> {selectedArticle.citations} Citations</span>
+                    <span className="flex items-center gap-1.5 cursor-pointer hover:text-blue-600 transition"><Share2 size={15} /> Share</span>
+                  </div>
+                  <button onClick={() => setSelectedArticle(null)}
+                    className="bg-blue-600 hover:bg-blue-700 transition text-white text-sm font-semibold px-6 py-2.5 rounded-xl">
+                    Close
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
