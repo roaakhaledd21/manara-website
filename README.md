@@ -23,8 +23,6 @@ shared feed.
 | Backend client | `fetch` wrapper in `src/lib/api.js` (Bearer-token auth) |
 | Auth backend | Laravel + Sanctum (token auth) |
 
-> A Supabase client (`src/lib/supabase.js`) is also present for optional features,
-> but the core app authenticates against the Laravel API.
 
 ---
 
