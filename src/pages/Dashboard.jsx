@@ -1,13 +1,37 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Search, Bell, ArrowUpRight, Zap, Clock,
   Crosshair, Scale, Share2, AlertTriangle, Globe, TrendingUp,
 } from 'lucide-react'
-import mapBg from '../assets/background/Container.png'
+import mapBg from '../assets/background/container.png'
 import Sidebar from '../components/Sidebar'
+import { api } from '../lib/api'
+
+// Build avatar initials from a display name ("John Doe" → "JD").
+const initialsOf = (name = '') =>
+  name.trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?'
 
 function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('')
+
+  // Community Feed widget — wired to GET /community (take first 2). See doc §2.
+  const [allFeed, setAllFeed] = useState([])
+
+  useEffect(() => {
+    let active = true
+    api.get('/community')
+      .then(posts => {
+        if (!active) return
+        const mapped = (posts || []).slice(0, 2).map(p => ({
+          initials: initialsOf(p.user?.name),
+          author: `@${p.user?.userName ?? 'unknown'}`,
+          text: p.verification?.content ?? '',
+        }))
+        setAllFeed(mapped)
+      })
+      .catch(() => { /* widget stays empty on failure; non-blocking */ })
+    return () => { active = false }
+  }, [])
 
   const stats = [
     { label: 'SCANNED_TOTAL', value: '124,892', change: '+12%', color: '#EC4899', changeColor: 'text-pink-500', up: true },
@@ -22,11 +46,9 @@ function Dashboard() {
     { title: 'Regional Conflict Video', desc: 'Misattributed footage from 2012 used for current', pct: '1,204%', tags: ['Out of Context', 'Geopolitics'] },
   ]
 
-  const allFeed = [
-    { initials: 'JW', author: '@ReutersLab', text: "Confirmed fake: Image of burning building from current 'protests' is actually stock footage." },
-    { initials: 'MK', author: '@FactFirst', text: 'Found a bot network promoting the same health claim script across 400 accounts.' },
-  ]
-
+  // BACKEND GAP: the stat cards above, "Emerging Trends" and this "Activity Timeline"
+  // have no endpoint yet (GET /dashboard/stats|trends|timeline are not implemented),
+  // so they remain mocked per frontend_integration.md §2.
   const allTimeline = [
     { color: 'border-green-400', time: '08:42:01 UTC', text: 'ANALYST_K7 completed source trace for', highlight: '#GlobalSummitLeak', highlightColor: 'text-blue-600', result: 'Result: 94% Credibility - Trusted Source Found.', resultColor: 'bg-green-50 text-green-700' },
     { color: 'border-red-300', time: '08:15:44 UTC', text: 'Automated scan triggered by', highlight: 'Critical Misinform Velocity', highlightColor: 'text-red-500', suffix: 'in EU cluster.' },

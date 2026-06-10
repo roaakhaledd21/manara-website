@@ -1,13 +1,30 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, ShieldCheck, PenLine, Users, TrendingUp, Archive,
-  Settings, HelpCircle,
+  Settings, HelpCircle, LogOut,
 } from 'lucide-react'
 import logo from '../assets/somecomponants/logo.png'
+import { authApi, clearAuth, getUser } from '../lib/api'
 
 function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
+
+  // Current user (from login/register). Falls back to the original placeholder labels.
+  const user = getUser()
+  const displayName = user?.name || 'ANALYST_042'
+  const handle = user?.userName ? `@${user.userName}` : 'LEVEL 4 CLEARANCE'
+  const initials = (user?.name || 'A').trim().charAt(0).toUpperCase()
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout() // POST /logout
+    } catch {
+      /* ignore — clear locally regardless */
+    }
+    clearAuth()
+    navigate('/login')
+  }
 
   const navItems = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
@@ -74,12 +91,19 @@ function Sidebar() {
 
         <div className="flex items-center gap-3 px-4 pt-4 border-t border-gray-200">
           <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-xs font-bold">
-            A
+            {initials}
           </div>
-          <div>
-            <p className="text-xs font-bold text-gray-900">ANALYST_042</p>
-            <p className="text-[10px] text-gray-400">LEVEL 4 CLEARANCE</p>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-gray-900 truncate">{displayName}</p>
+            <p className="text-[10px] text-gray-400 truncate">{handle}</p>
           </div>
+          <button
+            onClick={handleLogout}
+            title="Log out"
+            className="text-gray-400 hover:text-red-500 transition shrink-0"
+          >
+            <LogOut size={18} />
+          </button>
         </div>
       </div>
     </aside>

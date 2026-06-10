@@ -1,10 +1,12 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   Search, Bell, Plus, Send, Image, Clapperboard, Keyboard, X,
   LayoutGrid, List, Link2, Share2, Download, RefreshCw,
   Activity, BarChart2, Clock, PlusCircle, ZoomIn, Maximize2,
+  Globe, ExternalLink, CheckCircle2, Layers, ShieldAlert,
 } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
+import { api } from '../lib/api'
 
 function VerifyNews() {
   const [query, setQuery] = useState('')
@@ -12,6 +14,7 @@ function VerifyNews() {
   const [activeTool, setActiveTool] = useState(null)
   const [results, setResults] = useState(null)
   const [mediaResult, setMediaResult] = useState(null)
+  const [imageResult, setImageResult] = useState(null)
   const [heatmap, setHeatmap] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [page, setPage] = useState(1)
@@ -19,6 +22,10 @@ function VerifyNews() {
   const [viewMode, setViewMode] = useState('list') // 'list' or 'grid'
   const [selectedArticle, setSelectedArticle] = useState(null)
   const [textResult, setTextResult] = useState(null)
+  const [searchTotal, setSearchTotal] = useState(0)
+  const [searchError, setSearchError] = useState('')
+  const [isPublishing, setIsPublishing] = useState(false)
+  const [publishMsg, setPublishMsg] = useState(null) // { type: 'success'|'error'|'info', text }
   const fileInputRef = useRef(null)
   const mediaContainerRef = useRef(null)
   const imgRef = useRef(null)
@@ -76,72 +83,27 @@ function VerifyNews() {
     }
   }
 
-  const getMockSearchResults = (keyword) => [
-    { meta: 'PUBLISHED 2H AGO • BLOOMBERG INTEL', title: `Latest developments: ${keyword}`, desc: 'Comprehensive coverage from verified sources. Multiple independent journalists confirmed through primary documentation.', citations: 12 },
-    { meta: 'PUBLISHED 4H AGO • CNN NEWS',        title: `Eyewitness accounts confirm: ${keyword}`, desc: 'Ground reports and satellite imagery analyzed. Source credibility rated high based on historical accuracy.', citations: 8 },
-    { meta: 'PUBLISHED 6H AGO • REUTERS',         title: `International response to: ${keyword}`, desc: 'Officials and international bodies have issued statements. Timeline cross-referenced with verified social media records.', citations: 15 },
-    { meta: 'PUBLISHED 8H AGO • AP NEWS',         title: `Fact-check: Claims about ${keyword}`, desc: 'Independent fact-checkers traced the claim to primary sources. Viral versions contained altered captions.', citations: 11 },
-  ]
-
-
-
-  // ===== تحليل النص بالفرونت =====
-  const MISLEADING_WORDS = [
-    'fake','hoax','lie','lies','lied','lying','fabricated','manipulated','doctored',
-    'conspiracy','coverup','cover-up','false','untrue','misleading','propaganda',
-    'staged','scripted','crisis actor','deep state','new world order',
-  ]
-  const BIAS_WORDS = [
-    'outrageous','shocking','explosive','alarming','devastating','catastrophic',
-    'incredible','unbelievable','massive','absolutely','terrible','horrible',
-    'disgraceful','stunning','radical','extreme','evil','corrupt',
-  ]
-  const CREDIBLE_MARKERS = [
-    'according to','confirmed by','verified','official statement','press release',
-    'peer-reviewed','cited sources','data shows','research indicates','study found',
-    'government confirmed','court records','documented','evidence shows',
-  ]
-
-  const analyzeTextContent = (text) => {
-    const lower = text.toLowerCase()
-    const words = lower.split(/\s+/).filter(Boolean)
-    const sentences = text.split(/[.!?]+/).filter(s => s.trim())
-
-    // فحص كلمات التضليل
-    const misleadingFound = MISLEADING_WORDS.filter(w => lower.includes(w))
-    const biasFound = BIAS_WORDS.filter(w => lower.includes(w))
-    const credibleFound = CREDIBLE_MARKERS.filter(m => lower.includes(m))
-
-    // حساب النسب
-    const misleadingScore = Math.min(100, misleadingFound.length * 15 + biasFound.length * 8)
-    const credibilityScore = Math.max(0, Math.min(100, 70 + credibleFound.length * 10 - misleadingFound.length * 12 - biasFound.length * 5))
-    const neutralityScore = Math.max(0, 100 - biasFound.length * 10 - misleadingFound.length * 15)
-
-    // تحديد الحكم
-    let verdict, verdictColor
-    if (misleadingScore > 60 || credibilityScore < 30) {
-      verdict = 'HIGH MISINFORMATION RISK'
-      verdictColor = 'text-red-600 bg-red-50 border-red-200'
-    } else if (misleadingScore > 30 || credibilityScore < 60) {
-      verdict = 'PARTIALLY MISLEADING'
-      verdictColor = 'text-orange-600 bg-orange-50 border-orange-200'
-    } else {
-      verdict = 'LIKELY CREDIBLE'
-      verdictColor = 'text-green-600 bg-green-50 border-green-200'
-    }
-
-    return {
-      verdict, verdictColor,
-      misleadingScore,
-      credibilityScore,
-      neutralityScore,
-      wordCount: words.length,
-      sentenceCount: sentences.length,
-      misleadingWords: misleadingFound,
-      biasWords: biasFound,
-      credibleMarkers: credibleFound,
-    }
+  // ===== Text analysis is powered by the backend AI (POST /verifications) =====
+  // Map the backend's verdict / credibility score to a colour + emoji for the
+  // result badge. Thresholds mirror the verdict labels in the API docs.
+  const verdictStyle = (score) => {
+    if (score >= 70) return { color: 'text-green-600 bg-green-50 border-green-200', emoji: '✅' }
+    if (score >= 50) return { color: 'text-yellow-600 bg-yellow-50 border-yellow-200', emoji: '⚠️' }
+    if (score >= 25) return { color: 'text-orange-600 bg-orange-50 border-orange-200', emoji: '⚠️' }
+    return { color: 'text-red-600 bg-red-50 border-red-200', emoji: '🚨' }
   }
+
+  // Detect Arabic so we can render the AI reasoning right-to-left when needed.
+  const isArabic = (s = '') => /[؀-ۿ]/.test(s)
+
+  // ===== Image analysis is powered by reverse image search (POST /media-verify) =====
+  // Map the backend's circulation verdict to a colour, icon and human-readable label.
+  const imageVerdictStyle = (verdict) => ({
+    WIDELY_CIRCULATED: { color: 'text-orange-600 bg-orange-50 border-orange-200', icon: Globe,         label: 'Widely Circulated', hint: 'This image appears on many pages online — verify the original context before sharing.' },
+    FOUND_ONLINE:      { color: 'text-blue-600 bg-blue-50 border-blue-200',       icon: Search,        label: 'Found Online',      hint: 'This image has been published online before. Check the original source.' },
+    VISUALLY_SIMILAR:  { color: 'text-yellow-600 bg-yellow-50 border-yellow-200', icon: Layers,        label: 'Visually Similar',  hint: 'No exact match, but visually similar images exist online.' },
+    NOT_FOUND:         { color: 'text-green-600 bg-green-50 border-green-200',     icon: CheckCircle2,  label: 'Not Found Online',  hint: 'No prior circulation found — this may be a new or original image.' },
+  }[verdict] || { color: 'text-gray-600 bg-gray-50 border-gray-200', icon: Activity, label: verdict || '—', hint: '' })
 
   // ✅ Heatmap حقيقية بالـ Canvas — ترسم طبقة حرارية فوق الصورة
   const generateHeatmap = useCallback((imgEl, canvasEl, manipulationPct) => {
@@ -190,7 +152,7 @@ function VerifyNews() {
 
   const handleToolClick = (tool) => {
     setActiveTool(tool.label)
-    setResults(null); setMediaResult(null); setTextResult(null); setQuery(''); setFiles([]); setHeatmap(false); setZoom(1)
+    setResults(null); setMediaResult(null); setImageResult(null); setTextResult(null); setQuery(''); setFiles([]); setHeatmap(false); setZoom(1)
     if (tool.accept && fileInputRef.current) {
       fileInputRef.current.setAttribute('accept', tool.accept)
       fileInputRef.current.click()
@@ -198,7 +160,7 @@ function VerifyNews() {
   }
 
   const clearTool = () => {
-    setActiveTool(null); setFiles([]); setResults(null); setMediaResult(null)
+    setActiveTool(null); setFiles([]); setResults(null); setMediaResult(null); setImageResult(null)
     setQuery(''); setIsAnalyzing(false); setHeatmap(false); setZoom(1)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -215,40 +177,144 @@ function VerifyNews() {
 
   const handleSubmit = async () => {
     if (!query.trim() && !files.length) return
+    setSearchError('')
+
+    // ===== Text Analysis → POST /verifications (real AI credibility analysis) =====
+    // Triggered when no media/search tool is active and the user typed text.
+    if (!activeTool && query.trim()) {
+      setIsAnalyzing(true)
+      setPublishMsg(null)
+      try {
+        const content = query.trim()
+        const data = await api.post('/verifications', { content })
+        const a = data?.analysis || {}
+        const score = Number(a.credibility_score ?? data?.verification?.credibility_score ?? 0)
+        const misinfoRate = data?.publish_prompt?.misinformation_rate ?? Math.round(100 - score)
+        setTextResult({
+          content,
+          verificationId: data?.verification?.id ?? null,
+          verdict: a.verdict || '—',
+          credibilityScore: Math.round(score),
+          misinfoRate: Math.round(misinfoRate),
+          keywords: a.keywords || [],
+          sources: a.sources || [],
+          missingSources: a.missing_sources || [],
+          reasoning: a.ai_reasoning || '',
+          wordCount: content.split(/\s+/).filter(Boolean).length,
+          sentenceCount: content.split(/[.!?؟।\n]+/).filter(s => s.trim()).length || 1,
+          publishPrompt: data?.publish_prompt || null,
+          published: !!data?.verification?.published_to_community,
+        })
+      } catch (err) {
+        setTextResult(null)
+        setSearchError(err?.message || 'Analysis failed, please try again.')
+      } finally {
+        setIsAnalyzing(false)
+      }
+      return
+    }
+
+    // ===== Search by Keywords & Source Trace → GET /news-search (wired) =====
+    if (activeTool === 'Search by Keywords and Source Trace') {
+      const q = query.trim()
+      if (q.length < 2) { setSearchError('Please enter at least 2 characters.'); return }
+      setIsAnalyzing(true)
+      try {
+        const data = await api.get(`/news-search?q=${encodeURIComponent(q)}`)
+        const mapped = (data?.articles || []).map(a => ({
+          // Reuse the existing result-card shape so the UI is unchanged.
+          meta: `${a.source?.name || 'Unknown source'}${a.published_at ? ' • ' + new Date(a.published_at).toLocaleDateString() : ''}`,
+          title: a.title,
+          desc: a.description,
+          // The card slot is numeric ("{citations} Citations"); we surface the
+          // backend credibility score here as the closest available signal.
+          citations: a.credibility_score ?? 0,
+          article_url: a.article_url,
+        }))
+        setResults(mapped)
+        setSearchTotal(data?.total ?? mapped.length)
+        setPage(1)
+      } catch (err) {
+        setResults(null)
+        setSearchError(err?.message || 'Search failed, please try again.')
+      } finally {
+        setIsAnalyzing(false)
+      }
+      return
+    }
+
+    // ===== Image Analysis → POST /media-verify (real reverse-image search) =====
+    // The backend returns circulation data: verdict, web_entities, pages_found,
+    // visually_similar_urls, best_guess_labels and an Arabic ai_summary.
+    if (activeTool === 'Image Analysis') {
+      if (!files.length) { setSearchError('Please choose an image first.'); return }
+      setIsAnalyzing(true)
+      try {
+        const file = files[0].file
+        const fd = new FormData()
+        fd.append('media', file)
+        const data = await api.postForm('/media-verify', fd)
+        setImageResult({
+          ...data,
+          fileName: file.name,
+          fileSize: `${(file.size / 1024).toFixed(0)} KB`,
+          preview: files[0].preview || URL.createObjectURL(file),
+        })
+      } catch (err) {
+        setImageResult(null)
+        setSearchError(err?.message || 'Image analysis failed, please try again.')
+      } finally {
+        setIsAnalyzing(false)
+      }
+      return
+    }
+
     setIsAnalyzing(true)
-    // TODO: BACKEND — استبدل بالاستدعاء الحقيقي
     await new Promise(r => setTimeout(r, 1200))
-    if (activeTool === 'Image Analysis' || activeTool === 'Video Analysis') {
-      const type = activeTool === 'Image Analysis' ? 'image' : 'video'
-      setMediaResult(getMockMediaResult(type, files[0]?.file))
-    } else if (activeTool === 'Text Analysis') {
-      if (query.trim()) setTextResult(analyzeTextContent(query))
-    } else if (activeTool === 'Search by Keywords and Source Trace') {
-      setResults(getMockSearchResults(query || 'latest news'))
-      setPage(1)
-    } else if (!activeTool && query.trim()) {
-      // لو ما في أداة مختارة وفي نص → يحلله تلقائياً
-      setTextResult(analyzeTextContent(query))
+
+    if (activeTool === 'Video Analysis') {
+      // BACKEND GAP: the backend has no video forensics — POST /media-verify only
+      // processes images and returns 500 for video. These video results stay mocked
+      // to preserve the demo UI until a forensic video endpoint exists.
+      setMediaResult(getMockMediaResult('video', files[0]?.file))
     }
     setIsAnalyzing(false)
+  }
+
+  // Publish a high-misinformation verification to the community warning feed.
+  // Only available when the backend returned a publish_prompt (rate >= 60%).
+  const publishToCommunity = async () => {
+    if (!textResult?.verificationId) return
+    setIsPublishing(true)
+    setPublishMsg(null)
+    try {
+      await api.post(`/verifications/${textResult.verificationId}/publish`)
+      setTextResult(prev => prev && { ...prev, published: true })
+      setPublishMsg({ type: 'success', text: 'Published to the community warning feed.' })
+    } catch (err) {
+      // 409 = already published, 422 = below threshold — surface the backend message.
+      setPublishMsg({ type: 'error', text: err?.message || 'Could not publish, please try again.' })
+    } finally {
+      setIsPublishing(false)
+    }
   }
 
   // ✅ ZoomIn — يكبّر الصورة/الفيديو بضغطة
   const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.25, 3))
 
   // ✅ Maximize — يفتح الصورة/الفيديو بالحجم الكامل في تاب جديد
-  const handleMaximize = () => {
-    const url = mediaResult?.preview || mediaResult?.videoUrl
+  const handleMaximize = (media = mediaResult) => {
+    const url = media?.preview || media?.videoUrl
     if (url) window.open(url, '_blank')
   }
 
   // ✅ Download media — يحمّل الملف الأصلي
-  const handleDownloadMedia = () => {
-    const url = mediaResult?.preview || mediaResult?.videoUrl
+  const handleDownloadMedia = (media = mediaResult) => {
+    const url = media?.preview || media?.videoUrl
     if (!url) return
     const a = document.createElement('a')
     a.href = url
-    a.download = mediaResult.fileName
+    a.download = media.fileName
     a.click()
   }
 
@@ -399,6 +465,13 @@ function VerifyNews() {
           </div>
         )}
 
+        {/* Search error */}
+        {searchError && !isAnalyzing && (
+          <div className="bg-red-50 border border-red-200 text-red-600 rounded-2xl px-6 py-4 mb-8 text-sm">
+            {searchError}
+          </div>
+        )}
+
         {/* Image / Video Result */}
         {mediaResult && !isAnalyzing && (
           <div className="bg-white rounded-3xl shadow-sm p-6 mb-8">
@@ -510,12 +583,12 @@ function VerifyNews() {
                     </button>
                   )}
                   {/* Maximize — يفتح بتاب جديد */}
-                  <button onClick={handleMaximize} title="Open in new tab"
+                  <button onClick={() => handleMaximize()} title="Open in new tab"
                     className="p-1.5 hover:bg-gray-100 rounded-lg transition text-gray-500">
                     <Maximize2 size={16} />
                   </button>
                   {/* Download الملف الأصلي */}
-                  <button onClick={handleDownloadMedia} title="Download original file"
+                  <button onClick={() => handleDownloadMedia()} title="Download original file"
                     className="p-1.5 hover:bg-gray-100 rounded-lg transition text-gray-500">
                     <Download size={16} />
                   </button>
@@ -607,30 +680,192 @@ function VerifyNews() {
         )}
 
 
+        {/* Image Analysis Result — real reverse-image-search data from POST /media-verify */}
+        {imageResult && !isAnalyzing && (() => {
+          const vs = imageVerdictStyle(imageResult.verdict)
+          const VIcon = vs.icon
+          const entities = imageResult.web_entities || []
+          const maxScore = Math.max(1, ...entities.map(e => e.score || 0))
+          const pages = imageResult.pages_found || []
+          const similar = imageResult.visually_similar_urls || []
+          const labels = imageResult.best_guess_labels || []
+          return (
+            <div className="bg-white rounded-3xl shadow-sm p-6 mb-8">
+
+              {/* File info */}
+              <div className="flex items-center gap-2 mb-4 text-sm text-gray-500">
+                <span className="font-semibold text-gray-700">{imageResult.fileName}</span>
+                <span>•</span>
+                <span>{imageResult.fileSize}</span>
+              </div>
+
+              {/* Image preview */}
+              <div className="relative rounded-2xl overflow-hidden mb-4 bg-gray-900">
+                <img src={imageResult.preview} alt="analysis"
+                  className="w-full max-h-[420px] object-contain bg-black" />
+                <div className="absolute top-3 right-3 flex items-center gap-1">
+                  <button onClick={() => handleMaximize(imageResult)} title="Open in new tab"
+                    className="p-2 bg-white/90 hover:bg-white rounded-lg transition text-gray-600">
+                    <Maximize2 size={16} />
+                  </button>
+                  <button onClick={() => handleDownloadMedia(imageResult)} title="Download original file"
+                    className="p-2 bg-white/90 hover:bg-white rounded-lg transition text-gray-600">
+                    <Download size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Verdict badge */}
+              <div className={`border-2 rounded-2xl p-5 mb-6 flex items-start gap-4 ${vs.color}`}>
+                <VIcon size={28} className="shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xl font-bold">{vs.label}</p>
+                  {vs.hint && <p className="text-sm mt-1 opacity-80">{vs.hint}</p>}
+                </div>
+              </div>
+
+              {/* Stat tiles */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                <div className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center gap-2 text-gray-500 text-sm mb-2">
+                    <Globe size={16} className="text-blue-600" /> Pages Found
+                  </div>
+                  <p className="text-3xl font-bold text-gray-900">{imageResult.pages_found_count ?? pages.length}</p>
+                </div>
+                <div className="border border-gray-100 rounded-2xl p-5">
+                  <div className="flex items-center gap-2 text-gray-500 text-sm mb-2">
+                    <Layers size={16} className="text-blue-600" /> Similar Images
+                  </div>
+                  <p className="text-3xl font-bold text-gray-900">{imageResult.similar_image_count ?? similar.length}</p>
+                </div>
+                <div className={`rounded-2xl p-5 border ${imageResult.is_nsfw ? 'border-red-200 bg-red-50' : 'border-green-100 bg-green-50'}`}>
+                  <div className="flex items-center gap-2 text-gray-500 text-sm mb-2">
+                    {imageResult.is_nsfw
+                      ? <ShieldAlert size={16} className="text-red-600" />
+                      : <CheckCircle2 size={16} className="text-green-600" />}
+                    Safety Check
+                  </div>
+                  <p className={`text-xl font-bold ${imageResult.is_nsfw ? 'text-red-600' : 'text-green-600'}`}>
+                    {imageResult.is_nsfw ? 'NSFW detected' : 'Safe content'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Best-guess labels */}
+              {labels.length > 0 && (
+                <div className="border border-blue-100 bg-blue-50 rounded-2xl p-5 mb-6">
+                  <p className="font-bold text-blue-700 mb-3">🏷️ Best Guess</p>
+                  <div className="flex flex-wrap gap-2">
+                    {labels.map((l, i) => (
+                      <span key={i} className="bg-blue-100 text-blue-700 text-sm font-semibold px-3 py-1.5 rounded-full">{l}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Web entities + Pages found */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                {entities.length > 0 && (
+                  <div className="border border-gray-100 rounded-2xl p-6">
+                    <div className="flex items-center gap-2 font-bold text-gray-900 mb-5">
+                      <BarChart2 size={18} className="text-blue-600" /> Detected Entities
+                    </div>
+                    <div className="flex flex-col gap-4">
+                      {entities.map((e, i) => (
+                        <div key={i}>
+                          <div className="flex items-center justify-between text-sm mb-1.5">
+                            <span className="text-gray-600">{e.description}</span>
+                            <span className="font-bold text-blue-600">{Math.round(e.score)}</span>
+                          </div>
+                          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.max(6, (e.score / maxScore) * 100)}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {pages.length > 0 && (
+                  <div className="border border-gray-100 rounded-2xl p-6">
+                    <div className="flex items-center gap-2 font-bold text-gray-900 mb-5">
+                      <Link2 size={18} className="text-blue-600" /> Where It Appeared
+                    </div>
+                    <div className="flex flex-col gap-3 max-h-[320px] overflow-y-auto">
+                      {pages.map((p, i) => (
+                        <a key={i} href={p.url} target="_blank" rel="noreferrer"
+                          className="group flex items-start gap-2 text-sm text-gray-700 hover:text-blue-600 transition">
+                          <ExternalLink size={15} className="shrink-0 mt-0.5 text-gray-400 group-hover:text-blue-600" />
+                          <span className="leading-snug">{p.page_title || p.url}</span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Visually similar images */}
+              {similar.length > 0 && (
+                <div className="border border-gray-100 rounded-2xl p-6 mb-6">
+                  <div className="flex items-center gap-2 font-bold text-gray-900 mb-4">
+                    <Layers size={18} className="text-blue-600" /> Visually Similar Images
+                  </div>
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                    {similar.map((url, i) => (
+                      <a key={i} href={url} target="_blank" rel="noreferrer"
+                        className="block aspect-square rounded-xl overflow-hidden border border-gray-200 bg-gray-100 hover:ring-2 hover:ring-blue-400 transition">
+                        <img src={url} alt="" referrerPolicy="no-referrer" loading="lazy"
+                          className="w-full h-full object-cover"
+                          onError={(ev) => { ev.currentTarget.parentElement.style.display = 'none' }} />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* AI summary */}
+              {imageResult.ai_summary && (
+                <div className="border border-gray-100 bg-gray-50 rounded-2xl p-5 mb-6">
+                  <p className="font-bold text-gray-800 mb-2">AI Summary</p>
+                  <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line"
+                    dir={isArabic(imageResult.ai_summary) ? 'rtl' : 'ltr'}>
+                    {imageResult.ai_summary}
+                  </p>
+                </div>
+              )}
+
+              <button onClick={() => { setImageResult(null); setFiles([]); setQuery('') }}
+                className="w-full border-2 border-blue-600 text-blue-600 hover:bg-blue-50 transition font-bold py-3 rounded-2xl flex items-center justify-center gap-2 text-sm">
+                <PlusCircle size={18} /> New Investigation
+              </button>
+            </div>
+          )
+        })()}
+
+
         {/* Text Analysis Result */}
         {textResult && !isAnalyzing && (
           <div className="bg-white rounded-3xl shadow-sm p-8 mb-8">
             <h2 className="text-2xl font-bold text-gray-900 mb-6">Text Analysis Result</h2>
 
-            {/* Verdict */}
-            <div className={`border-2 rounded-2xl p-5 mb-6 flex items-center gap-4 ${textResult.verdictColor}`}>
-              <div className="text-3xl">
-                {textResult.verdict.includes('HIGH') ? '🚨' : textResult.verdict.includes('PARTIALLY') ? '⚠️' : '✅'}
+            {/* Verdict — driven by the backend AI analysis */}
+            {(() => { const vs = verdictStyle(textResult.credibilityScore); return (
+              <div className={`border-2 rounded-2xl p-5 mb-6 flex items-center gap-4 ${vs.color}`}>
+                <div className="text-3xl">{vs.emoji}</div>
+                <div>
+                  <p className="text-xl font-bold">{textResult.verdict}</p>
+                  <p className="text-sm mt-1 opacity-80">
+                    {textResult.wordCount} words · {textResult.sentenceCount} sentences analyzed
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-xl font-bold">{textResult.verdict}</p>
-                <p className="text-sm mt-1 opacity-80">
-                  {textResult.wordCount} words · {textResult.sentenceCount} sentences analyzed
-                </p>
-              </div>
-            </div>
+            )})()}
 
             {/* Score bars */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
               {[
-                { label: 'Misinformation Risk', value: textResult.misleadingScore, color: 'bg-red-500', textColor: 'text-red-600' },
+                { label: 'Misinformation Risk', value: textResult.misinfoRate,      color: 'bg-red-500',  textColor: 'text-red-600' },
                 { label: 'Credibility Score',   value: textResult.credibilityScore, color: 'bg-blue-500', textColor: 'text-blue-600' },
-                { label: 'Neutrality Score',    value: textResult.neutralityScore,  color: 'bg-green-500', textColor: 'text-green-600' },
               ].map((s) => (
                 <div key={s.label} className="border border-gray-100 rounded-2xl p-5">
                   <div className="flex items-center justify-between mb-3">
@@ -644,46 +879,88 @@ function VerifyNews() {
               ))}
             </div>
 
-            {/* Detected words */}
+            {/* AI reasoning */}
+            {textResult.reasoning && (
+              <div className="border border-gray-100 bg-gray-50 rounded-2xl p-5 mb-5">
+                <p className="font-bold text-gray-800 mb-2">AI Reasoning</p>
+                <p className="text-sm text-gray-600 leading-relaxed"
+                  dir={isArabic(textResult.reasoning) ? 'rtl' : 'ltr'}>
+                  {textResult.reasoning}
+                </p>
+              </div>
+            )}
+
+            {/* Keywords + Sources + Missing sources */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              {textResult.misleadingWords.length > 0 && (
-                <div className="border border-red-100 bg-red-50 rounded-2xl p-5">
-                  <p className="font-bold text-red-700 mb-3">🚨 Misleading Indicators</p>
+              {textResult.keywords.length > 0 && (
+                <div className="border border-blue-100 bg-blue-50 rounded-2xl p-5">
+                  <p className="font-bold text-blue-700 mb-3">🔑 Keywords</p>
                   <div className="flex flex-wrap gap-2">
-                    {textResult.misleadingWords.map(w => (
-                      <span key={w} className="bg-red-100 text-red-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
+                    {textResult.keywords.map((w, i) => (
+                      <span key={i} className="bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
                     ))}
                   </div>
                 </div>
               )}
-              {textResult.biasWords.length > 0 && (
-                <div className="border border-orange-100 bg-orange-50 rounded-2xl p-5">
-                  <p className="font-bold text-orange-700 mb-3">⚠️ Bias Language</p>
-                  <div className="flex flex-wrap gap-2">
-                    {textResult.biasWords.map(w => (
-                      <span key={w} className="bg-orange-100 text-orange-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {textResult.credibleMarkers.length > 0 && (
+              {textResult.sources.length > 0 && (
                 <div className="border border-green-100 bg-green-50 rounded-2xl p-5">
-                  <p className="font-bold text-green-700 mb-3">✅ Credibility Markers</p>
-                  <div className="flex flex-wrap gap-2">
-                    {textResult.credibleMarkers.map(w => (
-                      <span key={w} className="bg-green-100 text-green-700 text-xs font-semibold px-3 py-1 rounded-full">{w}</span>
+                  <p className="font-bold text-green-700 mb-3">✅ Sources</p>
+                  <div className="flex flex-col gap-2">
+                    {textResult.sources.map((s, i) => (
+                      <div key={i} className="text-xs text-green-800">
+                        <span className="font-semibold">{s.name}</span>
+                        {s.credibility != null && <span className="opacity-70"> · {s.credibility}%</span>}
+                        {s.note && <p className="text-green-700/70 mt-0.5">{s.note}</p>}
+                      </div>
                     ))}
                   </div>
                 </div>
               )}
-              {textResult.misleadingWords.length === 0 && textResult.biasWords.length === 0 && textResult.credibleMarkers.length === 0 && (
+              {textResult.missingSources.length > 0 && (
+                <div className="border border-orange-100 bg-orange-50 rounded-2xl p-5">
+                  <p className="font-bold text-orange-700 mb-3">⚠️ Missing Sources</p>
+                  <div className="flex flex-col gap-2">
+                    {textResult.missingSources.map((m, i) => (
+                      <div key={i} className="text-xs text-orange-800" dir={isArabic(m.claim) ? 'rtl' : 'ltr'}>
+                        <span className="font-semibold">{m.claim}</span>
+                        {m.suggested_source_type && <span className="opacity-70"> → {m.suggested_source_type}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {textResult.keywords.length === 0 && textResult.sources.length === 0 && textResult.missingSources.length === 0 && (
                 <div className="border border-gray-100 bg-gray-50 rounded-2xl p-5 col-span-3">
-                  <p className="text-gray-500 text-sm">No significant indicators detected. Add more content for a detailed analysis.</p>
+                  <p className="text-gray-500 text-sm">No additional source details were returned for this content.</p>
                 </div>
               )}
             </div>
 
-            <button onClick={() => { setTextResult(null); setQuery('') }}
+            {/* Publish-to-community prompt — only for high-misinformation content */}
+            {textResult.publishPrompt && !textResult.published && (
+              <div className="mt-6 border-2 border-red-200 bg-red-50 rounded-2xl p-5">
+                <p className="text-sm text-red-700 mb-3">{textResult.publishPrompt.message}</p>
+                <button onClick={publishToCommunity} disabled={isPublishing}
+                  className="bg-red-600 hover:bg-red-700 disabled:opacity-60 transition text-white font-bold px-6 py-2.5 rounded-xl text-sm flex items-center gap-2">
+                  {isPublishing && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  Publish to Community
+                </button>
+              </div>
+            )}
+
+            {textResult.published && (
+              <div className="mt-6 border border-green-200 bg-green-50 text-green-700 rounded-2xl p-4 text-sm">
+                ✅ Published to the community warning feed.
+              </div>
+            )}
+
+            {publishMsg && publishMsg.type === 'error' && (
+              <div className="mt-3 border border-red-200 bg-red-50 text-red-600 rounded-2xl p-4 text-sm">
+                {publishMsg.text}
+              </div>
+            )}
+
+            <button onClick={() => { setTextResult(null); setQuery(''); setPublishMsg(null) }}
               className="w-full mt-6 border-2 border-blue-600 text-blue-600 hover:bg-blue-50 transition font-bold py-3 rounded-2xl flex items-center justify-center gap-2 text-sm">
               <PlusCircle size={18} /> Analyse New Text
             </button>
@@ -694,7 +971,7 @@ function VerifyNews() {
         {results && !isAnalyzing && (
           <div>
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-2xl font-bold text-gray-900">Search Results ({results.length * 10} hits)</h2>
+              <h2 className="text-2xl font-bold text-gray-900">Search Results ({searchTotal} hits)</h2>
               <div className="flex items-center gap-2">
                 <button onClick={() => setViewMode('grid')}
                   className={`p-2 rounded-lg border transition ${viewMode === 'grid' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-200 text-gray-600 hover:bg-gray-100'}`}>

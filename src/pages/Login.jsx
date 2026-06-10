@@ -4,7 +4,7 @@ import logo from '../assets/somecomponants/logo.png'
 import cardBg from '../assets/background/card-bg.png'
 import loginIcon from '../assets/somecomponants/login.png'
 import loginImg from '../assets/background/loginimg.png'
-import { supabase } from '../lib/supabase'
+import { authApi, setToken, setUser } from '../lib/api'
 
 function Login() {
   const navigate = useNavigate()
@@ -21,19 +21,23 @@ function Login() {
     setLoading(true)
     setError('')
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-
-    setLoading(false)
-
-    if (signInError) {
-      setError('البريد الإلكتروني أو كلمة المرور غير صحيحة')
-      return
+    try {
+      // POST /login → { user, token }
+      const { token, user } = await authApi.login(email, password)
+      setToken(token)
+      setUser(user)
+      navigate('/dashboard')
+    } catch (err) {
+      // 422 → invalid credentials (per-field message), otherwise generic.
+      const msg = err?.errors?.email?.[0] || err?.message
+      setError(
+        err?.status === 422
+          ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة'
+          : msg || 'تعذّر تسجيل الدخول، حاول مرة أخرى'
+      )
+    } finally {
+      setLoading(false)
     }
-
-    navigate('/dashboard')
   }
 
   return (

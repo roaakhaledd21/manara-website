@@ -1,10 +1,69 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Search, Bell, SlidersHorizontal, TrendingUp, Zap, Clock,
   ChevronUp, ChevronDown, MessageSquare, Share2, Flag, Award, BadgeCheck,
-  X, Send, Check,
+  X, Send, Check, AlertTriangle,
 } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
+import { api, getUser } from '../lib/api'
+
+// Detect Arabic so flagged claims / AI reasoning render right-to-left.
+const isArabic = (s = '') => /[؀-ۿ]/.test(s)
+
+// Short "Xh ago" / "Xd ago" label from an ISO timestamp.
+const relativeTime = (iso) => {
+  if (!iso) return ''
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
+
+// Map a backend community post (GET /community item) — which wraps a flagged
+// verification — into the post-card shape the feed JSX already renders. Votes
+// and comments have no backend, so they start empty and live only on the client.
+const communityToPost = (cp) => {
+  const v = cp.verification || {}
+  const score = Math.round(Number(v.credibility_score ?? 0))
+  return {
+    id: cp.id,
+    tag: 'WARNING',
+    tagColor: 'bg-red-100 text-red-600',
+    author: `@${cp.user?.userName || 'unknown'}`,
+    time: relativeTime(cp.created_at),
+    votes: 0,
+    userVote: null,
+    title: v.content || '(no content)',
+    body: v.ai_reasoning || '',
+    misinfoRate: Math.max(0, Math.min(100, 100 - score)),
+    keywords: Array.isArray(v.keywords) ? v.keywords : [],
+    comments: [],
+    commentCount: 0,
+    reported: false,
+  }
+}
+
+// Map a backend card (GET /cards item) to the shape this page's "Shared
+// Investigations" cards already expect, so the existing JSX stays untouched.
+const cardToInvestigation = (card, currentUserId) => ({
+  id: card.id,
+  tag: 'VERIFICATION',
+  idNum: `#${card.id}`,
+  title: card.title,
+  desc: card.description,
+  confidence: card.progress ?? 0,
+  status: card.status,
+  creator_id: card.creator_id,
+  // `members` is rendered as a count in the JSX.
+  members: Array.isArray(card.members) ? card.members.length : 0,
+  joined:
+    card.creator_id === currentUserId ||
+    (Array.isArray(card.members) && card.members.some(m => m.id === currentUserId)),
+})
 
 function Community() {
   const [filter, setFilter] = useState('All')
@@ -19,45 +78,66 @@ function Community() {
   const [collabForm, setCollabForm] = useState({ title: '', type: 'public', desc: '' })
   const [collabSubmitted, setCollabSubmitted] = useState(false)
   const [showAllTrends, setShowAllTrends] = useState(false)
-  const [myInvestigations, setMyInvestigations] = useState([])
   const [editingInv, setEditingInv] = useState(null)
   const [editForm, setEditForm] = useState({ title: '', type: 'public', desc: '' })
 
-  // حالة التحقيقات
-  const [investigations, setInvestigations] = useState([
-    { id: 1, tag: 'VERIFICATION', idNum: '#88219-M', title: 'Climate Data Manipulation: Arctic Core', desc: 'Analyzing discrepancies between reported satellite thermal maps and...', confidence: 42, joined: false, members: 5 },
-    { id: 2, tag: 'VERIFICATION', idNum: '#88219-M', title: 'Climate Data Manipulation: Arctic Core', desc: 'Analyzing discrepancies between reported satellite thermal maps and...', confidence: 82, joined: false, members: 5 },
-  ])
+  // ===== Shared Investigations — wired to /cards =====
+  const currentUser = getUser()
+  const currentUserId = currentUser?.id
+  // Raw cards from GET /cards (source of truth for both the grid and "My Investigations").
+  const [cards, setCards] = useState([])
+  const [cardError, setCardError] = useState('') // small toast for 403/422/etc.
 
-  // حالة المنشورات
-  const [posts, setPosts] = useState([
-    {
-      id: 1, tag: 'DEBATE', tagColor: 'bg-indigo-100 text-indigo-600',
-      author: '@osint_specialist', time: '4h ago', votes: 156, userVote: null,
-      title: 'Metadata mismatch in the latest leaked diplomat papers. Possible fabrication by AI?',
-      body: 'The EXIF data points to a location in the Pacific, yet the shadows suggest an Eastern European sun angle. Looking for forensic imaging experts to verify.',
-      comments: [
-        { id: 1, author: '@shadow_analyst', time: '2h ago', text: 'I ran the luminance levels through the ELA engine. There is a distinct noise pattern shift around the text block. Definitely tampered.' }
-      ],
-      commentCount: 48, reported: false,
-    },
-    {
-      id: 2, tag: 'EVIDENCE', tagColor: 'bg-blue-100 text-blue-600',
-      author: '@fact_miner', time: '8h ago', votes: 82, userVote: null,
-      title: 'New evidence link for the Arctic Core investigation: Raw Buoy Data ID #442.',
-      body: '',
-      comments: [],
-      commentCount: 12, reported: false,
-    },
-    {
-      id: 3, tag: 'ANALYSIS', tagColor: 'bg-green-100 text-green-600',
-      author: '@veritas_lab', time: '12h ago', votes: 234, userVote: null,
-      title: 'Satellite image comparison reveals altered coastline in viral climate report.',
-      body: 'Three separate satellite providers show inconsistent shoreline data in the Arctic region. The discrepancy spans 2.3km suggesting post-processing manipulation.',
-      comments: [],
-      commentCount: 31, reported: false,
-    },
-  ])
+  const showCardError = (msg) => {
+    setCardError(msg)
+    setTimeout(() => setCardError(''), 3000)
+  }
+
+  const loadCards = () => {
+    api.get('/cards')
+      .then(data => setCards(Array.isArray(data) ? data : []))
+      .catch((err) => { showCardError(err?.message || 'Could not load investigations.') })
+  }
+
+  useEffect(loadCards, [])
+
+  // Replace one card in local state with the fresh copy returned by the API.
+  const upsertCard = (card) =>
+    setCards(prev => {
+      const exists = prev.some(c => c.id === card.id)
+      return exists ? prev.map(c => (c.id === card.id ? card : c)) : [card, ...prev]
+    })
+
+  const investigations = cards.map(c => cardToInvestigation(c, currentUserId))
+
+  // "My Investigations" sidebar — only cards the current user created (creator-only
+  // edit/delete per the doc). Mapped to the shape the existing sidebar JSX expects.
+  // NOTE: the backend card model has no public/private `type`, so we display a static
+  // placeholder; the value is not sent to the API on edit.
+  const myInvestigations = cards
+    .filter(c => c.creator_id === currentUserId)
+    .map(c => ({
+      id: c.id,
+      title: c.title,
+      type: 'public',
+      desc: c.description || 'No description provided.',
+      createdAt: '',
+      status: c.status === 'closed' ? 'Closed' : 'Active',
+    }))
+
+  // ===== Community Feed — wired to GET /community (published misinfo warnings) =====
+  // Each item is a verification flagged as high-misinformation and published to the
+  // community. Votes/comments are client-only (no backend support for them yet).
+  const [posts, setPosts] = useState([])
+  const [postsLoading, setPostsLoading] = useState(true)
+  const [postsError, setPostsError] = useState('')
+
+  useEffect(() => {
+    api.get('/community')
+      .then(data => setPosts((Array.isArray(data) ? data : []).map(communityToPost)))
+      .catch(err => setPostsError(err?.message || 'Could not load the community feed.'))
+      .finally(() => setPostsLoading(false))
+  }, [])
 
   const trends = [
     { title: '#GasPriceHoax2024', meta: '4.2k active discussions • Viral on X', badge: null },
@@ -86,11 +166,22 @@ function Community() {
     }))
   }
 
-  // Join Case
-  const handleJoin = (id) => {
-    setInvestigations(prev => prev.map(inv =>
-      inv.id === id ? { ...inv, joined: !inv.joined, members: inv.joined ? inv.members - 1 : inv.members + 1 } : inv
-    ))
+  // Join / leave a case — POST or DELETE /cards/{id}/members.
+  const handleJoin = async (id) => {
+    if (!currentUserId) { showCardError('Please log in to join a case.'); return }
+    const inv = investigations.find(i => i.id === id)
+    // Creators manage their own cases from "My Investigations", not via Join/Leave.
+    if (inv?.creator_id === currentUserId) return
+    try {
+      const updated = inv?.joined
+        ? await api.del(`/cards/${id}/members/${currentUserId}`)
+        : await api.post(`/cards/${id}/members`, { user_id: currentUserId })
+      if (updated && updated.id) upsertCard(updated)
+      else loadCards()
+    } catch (err) {
+      // 403 → card is closed and no longer accepts members.
+      showCardError(err?.message || 'Action failed, please try again.')
+    }
   }
 
   // إضافة تعليق
@@ -164,9 +255,14 @@ function Community() {
     inv.desc.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  // Initiate Collaboration
-  const handleDeleteInv = (id) => {
-    setMyInvestigations(prev => prev.filter(inv => inv.id !== id))
+  // Delete investigation — DELETE /cards/{id} (creator only, 204).
+  const handleDeleteInv = async (id) => {
+    try {
+      await api.del(`/cards/${id}`)
+      setCards(prev => prev.filter(c => c.id !== id))
+    } catch (err) {
+      showCardError(err?.message || 'Could not delete investigation.')
+    }
   }
 
   const handleStartEdit = (inv) => {
@@ -174,32 +270,42 @@ function Community() {
     setEditForm({ title: inv.title, type: inv.type, desc: inv.desc === 'No description provided.' ? '' : inv.desc })
   }
 
-  const handleSaveEdit = (id) => {
+  // Update investigation — PUT /cards/{id} (creator only). `type` is not sent
+  // because the backend card model has no public/private visibility field.
+  const handleSaveEdit = async (id) => {
     if (!editForm.title.trim()) return
-    setMyInvestigations(prev => prev.map(inv =>
-      inv.id === id ? { ...inv, title: editForm.title, type: editForm.type, desc: editForm.desc || 'No description provided.' } : inv
-    ))
-    setEditingInv(null)
+    try {
+      const updated = await api.put(`/cards/${id}`, {
+        title: editForm.title,
+        description: editForm.desc,
+      })
+      if (updated && updated.id) upsertCard(updated)
+      setEditingInv(null)
+    } catch (err) {
+      showCardError(err?.message || 'Could not update investigation.')
+    }
   }
 
-  const handleCollabSubmit = () => {
+  // Create investigation — POST /cards. The modal's public/private `type` is omitted
+  // (unsupported by the backend); `status` defaults to "open".
+  const handleCollabSubmit = async () => {
     if (!collabForm.title.trim()) return
-    const newInv = {
-      id: Date.now(),
-      title: collabForm.title,
-      type: collabForm.type,
-      desc: collabForm.desc || 'No description provided.',
-      createdAt: new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-      members: 1,
-      status: 'Active',
+    try {
+      const created = await api.post('/cards', {
+        title: collabForm.title,
+        description: collabForm.desc,
+        status: 'open',
+      })
+      if (created && created.id) upsertCard(created)
+      setCollabSubmitted(true)
+      setTimeout(() => {
+        setShowCollabModal(false)
+        setCollabSubmitted(false)
+        setCollabForm({ title: '', type: 'public', desc: '' })
+      }, 1500)
+    } catch (err) {
+      showCardError(err?.errors ? Object.values(err.errors)[0]?.[0] : (err?.message || 'Could not create investigation.'))
     }
-    setMyInvestigations(prev => [newInv, ...prev])
-    setCollabSubmitted(true)
-    setTimeout(() => {
-      setShowCollabModal(false)
-      setCollabSubmitted(false)
-      setCollabForm({ title: '', type: 'public', desc: '' })
-    }, 1500)
   }
 
   return (
@@ -241,7 +347,7 @@ function Community() {
                 </button>
                 {showFilterMenu && (
                   <div className="absolute right-0 top-10 bg-white border border-gray-200 rounded-2xl shadow-lg z-20 w-44 p-2">
-                    {['All', 'DEBATE', 'EVIDENCE', 'ANALYSIS'].map(f => (
+                    {['All', 'WARNING'].map(f => (
                       <button key={f} onClick={() => { setFilter(f); setShowFilterMenu(false) }}
                         className={`w-full text-left px-4 py-2.5 text-sm rounded-xl transition ${filter === f ? 'bg-blue-600 text-white font-semibold' : 'hover:bg-gray-50 text-gray-700'}`}>
                         {f}
@@ -323,12 +429,28 @@ function Community() {
 
                     {/* Body */}
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 text-sm mb-2">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${post.tagColor}`}>{post.tag}</span>
+                      <div className="flex items-center gap-2 text-sm mb-2 flex-wrap">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1 ${post.tagColor}`}>
+                          {post.tag === 'WARNING' && <AlertTriangle size={11} />}{post.tag}
+                        </span>
+                        {typeof post.misinfoRate === 'number' && (
+                          <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-50 text-red-600">
+                            {post.misinfoRate}% Misinformation
+                          </span>
+                        )}
                         <span className="text-gray-500">Posted by <span className="text-gray-700 font-medium">{post.author}</span> • {post.time}</span>
                       </div>
-                      <h3 className="font-bold text-gray-900 mb-2">{post.title}</h3>
-                      {post.body && <p className="text-gray-600 text-sm leading-relaxed mb-4">{post.body}</p>}
+                      <h3 className="font-bold text-gray-900 mb-2" dir={isArabic(post.title) ? 'rtl' : 'ltr'}>{post.title}</h3>
+                      {post.body && (
+                        <p className="text-gray-600 text-sm leading-relaxed mb-4" dir={isArabic(post.body) ? 'rtl' : 'ltr'}>{post.body}</p>
+                      )}
+                      {post.keywords?.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          {post.keywords.map((k, i) => (
+                            <span key={i} className="bg-blue-50 text-blue-600 text-xs font-medium px-2.5 py-1 rounded-full" dir={isArabic(k) ? 'rtl' : 'ltr'}>{k}</span>
+                          ))}
+                        </div>
+                      )}
 
                       {/* Actions */}
                       <div className="flex items-center gap-6 text-gray-500 text-sm mb-4">
@@ -431,8 +553,21 @@ function Community() {
                 </div>
               ))}
 
-              {filteredPosts.length === 0 && (
-                <div className="text-center py-12 text-gray-400">No posts match this filter.</div>
+              {postsLoading && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
+                  <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm">Loading community feed...</span>
+                </div>
+              )}
+              {!postsLoading && postsError && (
+                <div className="bg-red-50 border border-red-200 text-red-600 rounded-2xl px-6 py-4 text-sm">
+                  {postsError}
+                </div>
+              )}
+              {!postsLoading && !postsError && filteredPosts.length === 0 && (
+                <div className="text-center py-12 text-gray-400">
+                  {posts.length === 0 ? 'No community warnings have been published yet.' : 'No posts match this filter.'}
+                </div>
               )}
             </div>
           </div>
@@ -655,6 +790,13 @@ function Community() {
                 </>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Action feedback toast (403 closed-case, validation errors, etc.) */}
+        {cardError && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-5 py-3 rounded-xl shadow-lg">
+            {cardError}
           </div>
         )}
 

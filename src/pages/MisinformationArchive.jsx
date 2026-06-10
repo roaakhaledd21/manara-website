@@ -6,7 +6,13 @@ import {
 } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
 
-// TODO: BACKEND — كل البيانات دي تيجي من الـ API
+// BACKEND GAP: there is no archive endpoint that returns this rich shape. Per
+// frontend_integration.md, GET /community only exposes
+// user/userName/name, verification.content/credibility_score/keywords/ai_reasoning
+// and created_at — none of the archive fields below (category, country, reach,
+// method, confidence, platforms, evidence timeline, stat cards, filters). This page
+// therefore stays fully mocked until a dedicated archive endpoint exists.
+// TODO: BACKEND — expose GET /archive with category/country/method/reach/confidence/timeline.
 const ALL_ARCHIVES = [
   {
     id: 1, badge: 'FALSE', badgeColor: 'bg-red-500',

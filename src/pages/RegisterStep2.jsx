@@ -5,6 +5,12 @@ import cardBg from '../assets/background/card-bg.png'
 import imgSignup2 from '../assets/background/imgsignup2.png'
 
 function RegisterStep2() {
+  // BACKEND GAP: this profile-customization step (avatar upload, news-interest
+  // category, geographic region, "show my name/photo" visibility) has NO documented
+  // endpoint in frontend_integration.md — there is no `PUT /user`/`/profile`/avatar
+  // upload route. The account is already created and authenticated in step 1, so this
+  // screen only collects preferences locally and proceeds to the dashboard.
+  // TODO: BACKEND — expose a profile-update endpoint to persist avatar + preferences.
   const navigate = useNavigate()
   const [fileName, setFileName] = useState('لم يتم اختيار أي ملف')
   const [preview, setPreview] = useState(null)

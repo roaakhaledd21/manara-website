@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import logo from '../assets/somecomponants/logo.png'
 import cardBg from '../assets/background/card-bg.png'
-import { supabase } from '../lib/supabase'
+import { authApi, setToken, setUser } from '../lib/api'
 
 function Register() {
   const navigate = useNavigate()
@@ -17,6 +17,7 @@ function Register() {
   const [loading, setLoading] = useState(false)
 
   const handleNext = async () => {
+    if (!displayName) { setError('اسم العرض مطلوب'); return }
     if (!email) { setError('البريد الإلكتروني مطلوب'); return }
     if (!password) { setError('كلمة المرور مطلوبة'); return }
     if (password.length < 8) { setError('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return }
@@ -26,22 +27,27 @@ function Register() {
     setLoading(true)
     setError('')
 
-    const { error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { display_name: displayName }
-      }
-    })
-
-    setLoading(false)
-
-    if (signUpError) {
-      setError(signUpError.message)
-      return
+    try {
+      // POST /register → { user, token }.
+      // The backend needs both `userName` (unique handle) and `name`. The form only
+      // collects a single "display name", so per the integration doc we map it to both.
+      const { token, user } = await authApi.register({
+        userName: displayName,
+        name: displayName,
+        email,
+        password,
+        password_confirmation: confirmPassword,
+      })
+      setToken(token)
+      setUser(user)
+      navigate('/register-step2')
+    } catch (err) {
+      // 422 → surface the first field-level validation message (e.g. duplicate userName/email).
+      const firstFieldError = err?.errors && Object.values(err.errors)[0]?.[0]
+      setError(firstFieldError || err?.message || 'تعذّر إنشاء الحساب، حاول مرة أخرى')
+    } finally {
+      setLoading(false)
     }
-
-    navigate('/register-step2')
   }
 
   return (

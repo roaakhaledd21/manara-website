@@ -382,13 +382,14 @@
 
 
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Search, Bell, Bold, Italic, List, Link2, Quote, Tag, X,
   BookOpen, ShieldCheck, BarChart3, UserPlus, Scale, AlertTriangle,
   FolderOpen, Eye, Lightbulb, CheckCircle2, AlertCircle, RefreshCw,
 } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
+import { api } from '../lib/api'
 
 // ===== محرّك التحليل الذكي للمقال =====
 
@@ -549,6 +550,10 @@ function NewsComposer() {
   const [wordCount, setWordCount] = useState(0)
   const [charCount, setCharCount] = useState(0)
   const [analysis, setAnalysis] = useState({ score: 100, suggestions: [] })
+  const [content, setContent] = useState('')
+  // Backend live analysis (POST /composer/analyze): neutrality, source_citations,
+  // fact_validation, publishing_readiness. Null until the first response arrives.
+  const [aiAnalysis, setAiAnalysis] = useState(null)
   const editorRef = useRef(null)
 
   const format = (command) => {
@@ -567,7 +572,23 @@ function NewsComposer() {
     setWordCount(text ? text.split(/\s+/).filter(Boolean).length : 0)
     setCharCount(text.length)
     setAnalysis(analyzeText(text))
+    setContent(text)
   }, [])
+
+  // ===== Live AI analysis → POST /composer/analyze (debounced) =====
+  // Feeds the Neutrality, Source Citation, Fact Validation and Publishing Readiness
+  // widgets with real backend data. The client-side "Writing Suggestions" widget
+  // (analyzeText) is kept as-is — it's an editorial helper the backend doesn't replace.
+  useEffect(() => {
+    let active = true
+    const t = setTimeout(() => {
+      if (!content.trim()) { if (active) setAiAnalysis(null); return }
+      api.post('/composer/analyze', { title, content })
+        .then(res => { if (active) setAiAnalysis(res) })
+        .catch(() => { /* keep last analysis; non-blocking */ })
+    }, 800)
+    return () => { active = false; clearTimeout(t) }
+  }, [title, content])
 
   // تطبيق البديل في النص مباشرة
   const applyReplacement = (original, replacement) => {
@@ -594,23 +615,50 @@ function NewsComposer() {
 
   const removeTag = (tag) => setTags(tags.filter((t) => t !== tag))
 
-  const { score: neutralityScore, suggestions: writingSuggestions } = analysis
+  const { suggestions: writingSuggestions } = analysis
+  // Neutrality: prefer the backend score, fall back to the client estimate before
+  // the first /composer/analyze response arrives.
+  const neutralityScore = aiAnalysis?.neutrality?.score ?? analysis.score
 
-  const citations = [
-    { source: 'SEC FILING 2024-A', match: '98% MATCH', desc: 'Direct evidence of capital diversion matching your "40% revenue" claim.' },
-    { source: 'REUTERS INTEL', match: '85% MATCH', desc: "Confirms John D. Vane's resignation date of March 12th." },
-  ]
+  // Source Citation Assistant ← source_citations.detected_sources + recommended_citations
+  const sc = aiAnalysis?.source_citations
+  const citations = sc
+    ? [
+        ...(sc.detected_sources || []).map(s => ({
+          source: (s.name || 'SOURCE').toUpperCase(),
+          match: s.credibility_score != null ? `${s.credibility_score}% CRED` : (s.type || '').toUpperCase(),
+          desc: `Detected ${s.type || 'source'} cited in the article.`,
+        })),
+        ...(sc.recommended_citations || []).map(c => ({
+          source: 'SUGGESTED SOURCE',
+          match: 'RECOMMENDED',
+          desc: `${c.claim}${c.suggested_source_type ? ' — add a ' + c.suggested_source_type : ''}.`,
+        })),
+      ]
+    : []
 
-  const facts = [
-    { type: 'unverified', title: 'Unverified Claim', desc: '"Eastern Europe shell companies" – No direct links found.' },
-    { type: 'confirmed', title: 'Confirmed Data', desc: 'Cayman Islands registration for Nero-Tech confirmed via Global Financial Database.' },
-  ]
+  // Fact Validation ← fact_validation.verified / questionable / unsupported claims
+  const fv = aiAnalysis?.fact_validation
+  const facts = fv
+    ? [
+        ...(fv.verified_claims || []).map(c => ({ type: 'confirmed', title: 'Verified Claim', desc: `${c.claim}${c.confidence != null ? ` (${c.confidence}% confidence)` : ''}.` })),
+        ...(fv.questionable_claims || []).map(c => ({ type: 'unverified', title: 'Questionable Claim', desc: `${c.claim}${c.reason ? ' — ' + c.reason : ''}` })),
+        ...(fv.unsupported_claims || []).map(c => ({ type: 'unverified', title: 'Unsupported Claim', desc: `${c.claim}${c.reason ? ' — ' + c.reason : ''}` })),
+      ]
+    : []
 
+  // Publishing Readiness ← publishing_readiness.{transparency_score, peer_review, legal_check}
+  const pr = aiAnalysis?.publishing_readiness
+  const legalStatus = pr?.legal_check?.status
   const readiness = [
-    { label: 'Transparency Score', icon: BarChart3, value: `${neutralityScore >= 90 ? 'A' : neutralityScore >= 80 ? 'A-' : neutralityScore >= 70 ? 'B+' : 'B'} (${neutralityScore}%)`, bg: 'bg-blue-100', color: 'text-blue-600' },
-    { label: 'Peer Review', icon: UserPlus, value: 'PENDING (2/3)', bg: 'bg-pink-100', color: 'text-pink-600', badge: true },
-    { label: 'Legal Check', icon: Scale, value: null, warn: true, bg: 'bg-red-100', color: 'text-red-600' },
+    { label: 'Transparency Score', icon: BarChart3, value: `${pr?.transparency_score ?? neutralityScore}%`, bg: 'bg-blue-100', color: 'text-blue-600' },
+    { label: 'Peer Review', icon: UserPlus, value: (pr?.peer_review?.status || 'pending').replace('_', ' ').toUpperCase(), bg: 'bg-pink-100', color: 'text-pink-600', badge: true },
+    { label: 'Legal Check', icon: Scale, value: (legalStatus || 'clear').toUpperCase(), warn: legalStatus === 'warning' || legalStatus === 'flag', bg: 'bg-red-100', color: 'text-red-600' },
   ]
+
+  // BACKEND NOTE: POST /reports (save the report + persist ai_feedback) is available,
+  // but the current composer has no Save/Publish button to trigger it. A "Save Report"
+  // affordance is needed in the UI to wire it; left out here to avoid changing the design.
 
   return (
     <div className="flex min-h-screen bg-[#f4f6fb]" dir="ltr">
@@ -754,6 +802,9 @@ function NewsComposer() {
                 <BookOpen size={18} className="text-blue-600" /> Source Citation Assistant
               </div>
               <div className="flex flex-col gap-3">
+                {citations.length === 0 && (
+                  <p className="text-sm text-gray-400">Start writing — cited & suggested sources will appear here.</p>
+                )}
                 {citations.map((c, i) => (
                   <div key={i} className="border border-gray-100 rounded-xl p-4">
                     <div className="flex items-center justify-between mb-1.5">
@@ -773,6 +824,9 @@ function NewsComposer() {
                 <ShieldCheck size={18} className="text-blue-600" /> Fact Validation
               </div>
               <div className="flex flex-col gap-4">
+                {facts.length === 0 && (
+                  <p className="text-sm text-gray-400">Fact validation results will appear here as you write.</p>
+                )}
                 {facts.map((f, i) => (
                   <div key={i} className="flex gap-2.5">
                     <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${f.type === 'confirmed' ? 'bg-green-500' : 'bg-red-500'}`} />
