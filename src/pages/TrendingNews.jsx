@@ -2,6 +2,11 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Search, Bell, Globe, ChevronDown, BarChart2, TrendingUp, TrendingDown, X } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
 
+// BACKEND GAP: the Trending/Live-Monitoring data below (regional density map points,
+// zone stats, analyst briefs, keyword frequencies, trending topics, virality scores)
+// has NO endpoint in frontend_integration.md (no GET /dashboard/trends or equivalent).
+// The entire page is driven by the static DATA map until a trends endpoint exists.
+// TODO: BACKEND — expose a regional trends endpoint to replace the DATA constant.
 const REGIONS = ['Global Region', 'Middle East', 'Europe', 'Africa', 'Asia', 'Americas']
 const TIME_RANGES = ['24h', '7d', '30d']
 
